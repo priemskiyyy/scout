@@ -4,6 +4,7 @@ import type {
   FilterExpression,
 } from "@priemskiyyy/scout";
 import { meilisearch } from "src/meilisearch";
+import type { MeilisearchIndexClient } from "src/types/MeilisearchIndexClient";
 import type { MeilisearchSearchOptions } from "src/types/MeilisearchSearchOptions";
 import { createMeilisearchFake } from "src/meilisearch.fixture";
 import type { MeilisearchFakeOptions } from "src/meilisearch.fixture";
@@ -282,4 +283,84 @@ test("a value Meilisearch cannot compare is refused rather than stringified", as
   await expect(
     search({ filter: comparison("released", "eq", new Date(0)) }),
   ).rejects.toThrow(/strings, finite numbers and booleans/);
+});
+
+test("page mode asks for a page and reports an exhaustive total", async () => {
+  const { fake, search } = setup();
+
+  const response = await search({ page: { current: 2, size: 2 } });
+
+  expect(fake.calls[0]?.params).toMatchObject({ page: 2, hitsPerPage: 2 });
+  expect(fake.calls[0]?.params).not.toHaveProperty("offset");
+  expect(response.total).toEqual({
+    value: 5,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect(response.page).toEqual({
+    kind: "page",
+    current: 2,
+    size: 2,
+    next: 3,
+    previous: 1,
+  });
+});
+
+test("the last page of page mode reports no next page", async () => {
+  const { search } = setup();
+
+  const response = await search({ page: { current: 3, size: 2 } });
+
+  expect(response.page.next).toBeNull();
+});
+
+test("a total that reaches maxTotalHits is a cap, not a count", async () => {
+  const { search } = setup({ maxTotalHits: 2 });
+
+  const response = await search();
+
+  expect(response.total).toEqual({
+    value: 2,
+    accuracy: "lower-bound",
+    scope: "retrievable",
+  });
+});
+
+test("offset mode asks by offset and never calls its estimate exact", async () => {
+  const { fake, search } = setup({ pagination: "offset" });
+
+  const response = await search({ page: { current: 2, size: 2 } });
+
+  expect(fake.calls[0]?.params).toMatchObject({ offset: 2, limit: 2 });
+  expect(fake.calls[0]?.params).not.toHaveProperty("page");
+  expect(response.total).toEqual({
+    value: 5,
+    accuracy: "estimated",
+    scope: "matches",
+  });
+});
+
+test("offset mode admits it cannot tell whether a full page has a next", async () => {
+  const { search } = setup({ pagination: "offset" });
+
+  const full = await search({ page: { current: 1, size: 2 } });
+  const short = await search({ page: { current: 3, size: 2 } });
+
+  expect(full.page.next).toBe("unknown");
+  expect(short.page.next).toBeNull();
+});
+
+test("a response with no pagination block reports an unknown total", async () => {
+  const index: MeilisearchIndexClient = {
+    uid: "products",
+    search: () => Promise.resolve({ hits: [], processingTimeMs: 3 }),
+  };
+  const adapter = meilisearch({ index, profiles: PROFILES, sorts: SORTS });
+
+  const response = await adapter.search(request(), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
+  expect(response.page.next).toBe("unknown");
 });
