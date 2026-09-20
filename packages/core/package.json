@@ -1,0 +1,73 @@
+{
+  "name": "@priemskiyyy/scout",
+  "version": "0.1.0",
+  "description": "Provider-independent typed search: typed indexes, an immutable search builder, a portable filter AST, deterministic query identity, and honest pagination behind a small adapter contract.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/priemskiyyy/scout.git",
+    "directory": "packages/core"
+  },
+  "bugs": {
+    "url": "https://github.com/priemskiyyy/scout/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./mock": {
+      "types": "./dist/mock.d.ts",
+      "import": "./dist/mock.js",
+      "default": "./dist/mock.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../.. --project core"
+  },
+  "keywords": [
+    "search",
+    "full-text-search",
+    "algolia",
+    "meilisearch",
+    "typesense",
+    "orama",
+    "minisearch",
+    "facets",
+    "filters",
+    "typescript",
+    "scout",
+    "tanstack-query",
+    "react-native"
+  ],
+  "homepage": "https://priemskiyyy.github.io/scout/",
+  "peerDependencies": {
+    "vitest": ">=3"
+  },
+  "peerDependenciesMeta": {
+    "vitest": {
+      "optional": true
+    }
+  }
+}
