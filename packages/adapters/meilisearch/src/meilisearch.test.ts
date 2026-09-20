@@ -364,3 +364,132 @@ test("a response with no pagination block reports an unknown total", async () =>
   expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
   expect(response.page.next).toBe("unknown");
 });
+
+test("highlight parts line up with text outside the Basic Multilingual Plane", async () => {
+  const title = "Café Zürich 日本語 🚀 shoe";
+  const { search } = setup();
+
+  for (const term of ["café", "日本語", "🚀"]) {
+    const response = await search({ query: term, highlights: ["title"] });
+    const fragment = response.hits[0]?.highlights.title?.[0];
+    const matched = fragment?.parts.filter((part) => part.matched) ?? [];
+
+    expect(fragment?.parts.map((part) => part.text).join("")).toBe(title);
+    expect(matched.map((part) => part.text)).toEqual([
+      term === "café" ? "Café" : term,
+    ]);
+    expect(fragment?.path).toEqual(["title"]);
+    expect(fragment?.truncated).toBe(false);
+  }
+});
+
+test("an emoji is highlighted whole rather than split into surrogates", async () => {
+  const { search } = setup();
+
+  const response = await search({ query: "🚀", highlights: ["title"] });
+  const parts = response.hits[0]?.highlights.title?.[0]?.parts ?? [];
+  const matched = parts.find((part) => part.matched)?.text ?? "";
+
+  expect([...matched]).toEqual(["🚀"]);
+  expect(matched.length).toBe(2);
+});
+
+test("a document carrying marker shaped text cannot forge a highlight", async () => {
+  const { search } = setup();
+
+  const response = await search({ query: "injected", highlights: ["title"] });
+  const parts = response.hits[0]?.highlights.title?.[0]?.parts ?? [];
+
+  expect(parts).toEqual([
+    { text: "[scout:forged]", matched: false },
+    { text: "injected", matched: true },
+    { text: "[/scout:forged] shoe", matched: false },
+  ]);
+});
+
+test("the markers change between searches, so no document can hold one", async () => {
+  const { fake, search } = setup();
+
+  await search({ highlights: ["title"] });
+  await search({ highlights: ["title"] });
+
+  expect(fake.calls[0]?.params?.highlightPreTag).toMatch(/^\[scout:.+\]$/);
+  expect(fake.calls[0]?.params?.highlightPreTag).not.toBe(
+    fake.calls[1]?.params?.highlightPreTag,
+  );
+});
+
+test("the adapter never asks for the byte offsets in _matchesPosition", async () => {
+  const { fake, search } = setup();
+
+  await search({ highlights: ["title"] });
+
+  expect(fake.calls[0]?.params).not.toHaveProperty("showMatchesPosition");
+});
+
+test("an array field reports one fragment per element with its position", async () => {
+  const { search } = setup();
+
+  const response = await search({ query: "running", highlights: ["tags"] });
+  const fragments = response.hits[0]?.highlights.tags ?? [];
+
+  expect(fragments.map((fragment) => fragment.path)).toEqual([
+    ["tags", 0],
+    ["tags", 1],
+  ]);
+  expect(fragments[0]?.parts).toEqual([{ text: "running", matched: true }]);
+});
+
+test("a formatted value with a marker it never closes degrades to plain text", async () => {
+  const index: MeilisearchIndexClient = {
+    uid: "products",
+    search: (_query, params) =>
+      Promise.resolve({
+        hits: [
+          {
+            id: "1",
+            title: "broken",
+            _formatted: { title: `${params?.highlightPreTag}broken` },
+          },
+        ],
+        processingTimeMs: 1,
+        totalHits: 1,
+        totalPages: 1,
+        page: 1,
+        hitsPerPage: 10,
+      }),
+  };
+  const adapter = meilisearch({ index, profiles: PROFILES, sorts: SORTS });
+
+  const response = await adapter.search(request({ highlights: ["title"] }), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.hits[0]?.highlights.title?.[0]?.parts).toEqual([
+    { text: "broken", matched: false },
+  ]);
+});
+
+test("a requested facet carries its distribution, its stats and no claim of completeness", async () => {
+  const { search } = setup();
+
+  const response = await search({ facets: ["brand", "price"] });
+
+  expect(response.facets.brand).toEqual({
+    field: "brand",
+    values: [
+      { value: "Apex", count: 2 },
+      { value: "Vertex", count: 2 },
+      { value: "Forge", count: 1 },
+    ],
+    exhaustive: "unknown",
+    native: {
+      distribution: { Apex: 2, Vertex: 2, Forge: 1 },
+      stats: null,
+    },
+  });
+  expect(response.facets.price?.native).toEqual({
+    distribution: { "120": 1, "90": 1, "150": 1, "60": 1, "45": 1 },
+    stats: { min: 45, max: 150 },
+  });
+});
