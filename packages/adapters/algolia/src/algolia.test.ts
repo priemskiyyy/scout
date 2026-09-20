@@ -554,3 +554,102 @@ test("a facet algolia said nothing about is unknown rather than exhaustive", asy
 
   expect(response.facets.brand?.exhaustive).toBe("unknown");
 });
+
+test("highlights come back as parts, split on a marker the adapter chose", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    query: "running",
+    highlights: ["title"],
+  });
+
+  expect(paramsOf(fake)?.attributesToHighlight).toEqual(["title"]);
+  expect(response.hits[0]?.highlights.title).toEqual([
+    {
+      path: ["title"],
+      truncated: false,
+      parts: [
+        { text: "Acme ", matched: false },
+        { text: "running", matched: true },
+        { text: " shoe", matched: false },
+      ],
+    },
+  ]);
+});
+
+test("a document that contains markup cannot forge a highlight", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    query: "markup",
+    highlights: ["title"],
+  });
+  const parts = response.hits[0]?.highlights.title?.[0]?.parts ?? [];
+
+  expect(parts).toEqual([
+    { text: "Lamp with <em>", matched: false },
+    { text: "markup", matched: true },
+    { text: "</em> inside", matched: false },
+  ]);
+  expect(parts.filter((part) => part.matched)).toHaveLength(1);
+});
+
+test("the highlight marker is never the default tag and never repeats", async () => {
+  const fake = createAlgoliaFake();
+  const adapter = adapterFor(fake.client);
+  const options = { signal: new AbortController().signal };
+
+  await adapter.search(request({ highlights: ["title"] }), options);
+  await adapter.search(request({ highlights: ["title"] }), options);
+
+  expect(fake.calls[0]?.searchParams.highlightPreTag).not.toBe("<em>");
+  expect(fake.calls[0]?.searchParams.highlightPreTag).not.toBe(
+    fake.calls[1]?.searchParams.highlightPreTag,
+  );
+});
+
+test("an array field reports which element matched", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    query: "running",
+    highlights: ["tags"],
+  });
+
+  expect(response.hits[0]?.highlights.tags).toEqual([
+    {
+      path: ["tags", 0],
+      truncated: false,
+      parts: [{ text: "running", matched: true }],
+    },
+    {
+      path: ["tags", 1],
+      truncated: false,
+      parts: [{ text: "sale", matched: false }],
+    },
+  ]);
+});
+
+test("an unbalanced marker degrades to plain text instead of a guess", async () => {
+  const fake = createAlgoliaFake({ brokenHighlights: true });
+
+  const response = await searchWith(fake, {
+    query: "running",
+    highlights: ["title"],
+  });
+
+  expect(response.hits[0]?.highlights.title?.[0]?.parts).toEqual([
+    { text: "Acme running shoe", matched: false },
+  ]);
+});
+
+test("a requested highlight algolia did not return is empty, not missing", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    query: "running",
+    highlights: ["summary"],
+  });
+
+  expect(response.hits[0]?.highlights.summary).toEqual([]);
+});
