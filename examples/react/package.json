@@ -1,0 +1,30 @@
+{
+  "name": "example-react",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint:typescript": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@orama/orama": "3.1.18",
+    "@priemskiyyy/scout": "workspace:*",
+    "@priemskiyyy/scout-fuse": "workspace:*",
+    "@priemskiyyy/scout-minisearch": "workspace:*",
+    "@priemskiyyy/scout-orama": "workspace:*",
+    "@priemskiyyy/scout-tanstack-query": "workspace:*",
+    "@tanstack/react-query": "5.103.1",
+    "fuse.js": "7.5.0",
+    "minisearch": "7.2.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.17",
+    "@types/react-dom": "19.2.7",
+    "typescript": "5.8.3",
+    "vite": "8.3.0",
+    "vitest": "4.1.10"
+  }
+}
