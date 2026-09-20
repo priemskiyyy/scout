@@ -1,10 +1,17 @@
-import { SearchConfigurationError } from "@priemskiyyy/scout";
-import type { AdapterSearchRequest } from "@priemskiyyy/scout";
+import {
+  SearchConfigurationError,
+  UnsupportedSearchFeatureError,
+} from "@priemskiyyy/scout";
+import type {
+  AdapterSearchRequest,
+  FilterExpression,
+} from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
 import { algolia } from "src/algolia";
 import type { AlgoliaSearchClient } from "src/types/AlgoliaSearchClient";
 import type { AlgoliaSearchParams } from "src/types/AlgoliaSearchParams";
 import { createAlgoliaFake } from "src/algolia.fixture";
+import type { AlgoliaFakeOptions } from "src/algolia.fixture";
 
 const SORTS = {
   relevance: { index: { name: "products" } },
@@ -111,6 +118,22 @@ const searchWith = (
 const paramsOf = (fake: ReturnType<typeof createAlgoliaFake>) =>
   fake.calls[0]?.searchParams;
 
+/** Runs one filter and returns the string Algolia would have been given. */
+const filterString = async (
+  filter: FilterExpression,
+  fakeOptions: AlgoliaFakeOptions = {},
+) => {
+  const fake = createAlgoliaFake(fakeOptions);
+  await searchWith(fake, { filter });
+  return paramsOf(fake)?.filters;
+};
+
+const comparison = (
+  field: string,
+  operator: Extract<FilterExpression, { type: "comparison" }>["operator"],
+  value: unknown,
+): FilterExpression => ({ type: "comparison", field, operator, value });
+
 const failed = (promise: Promise<unknown>) =>
   promise.then(
     () => undefined,
@@ -180,4 +203,162 @@ test("a profile the adapter was not configured for is a configuration error", as
 
   expect(error).toBeInstanceOf(SearchConfigurationError);
   expect(error).toHaveProperty("path", "profiles.boosted");
+});
+
+test("a string equality is quoted so its content cannot become syntax", async () => {
+  expect(await filterString(comparison("brand", "eq", "acme"))).toBe(
+    'brand:"acme"',
+  );
+});
+
+test("a hostile value keeps its quotes and backslashes as data", async () => {
+  expect(await filterString(comparison("brand", "eq", 'Ac"me\\ & Co'))).toBe(
+    'brand:"Ac\\"me\\\\ & Co"',
+  );
+});
+
+test("a value that spells an operator is quoted rather than parsed", async () => {
+  expect(await filterString(comparison("brand", "eq", "acme OR bolt"))).toBe(
+    'brand:"acme OR bolt"',
+  );
+});
+
+test("an attribute name that is not a bare identifier is quoted too", async () => {
+  expect(await filterString(comparison("brand name", "eq", "acme"))).toBe(
+    '"brand name":"acme"',
+  );
+});
+
+test("a number compares numerically and a boolean reads as a facet", async () => {
+  expect(await filterString(comparison("price", "eq", 79))).toBe("price = 79");
+  expect(await filterString(comparison("inStock", "eq", true))).toBe(
+    "inStock:true",
+  );
+});
+
+test("a negation uses NOT for text and the numeric operator for numbers", async () => {
+  expect(await filterString(comparison("brand", "neq", "acme"))).toBe(
+    'NOT brand:"acme"',
+  );
+  expect(await filterString(comparison("price", "neq", 79))).toBe(
+    "price != 79",
+  );
+});
+
+test("a set becomes a disjunction and its negation a conjunction of negations", async () => {
+  expect(await filterString(comparison("brand", "in", ["acme", "bolt"]))).toBe(
+    '(brand:"acme" OR brand:"bolt")',
+  );
+  expect(
+    await filterString(comparison("brand", "not-in", ["acme", "bolt"])),
+  ).toBe('NOT brand:"acme" AND NOT brand:"bolt"');
+  expect(await filterString(comparison("price", "not-in", [1, 2]))).toBe(
+    "price != 1 AND price != 2",
+  );
+});
+
+test("comparisons and ranges use algolia's numeric syntax", async () => {
+  expect(await filterString(comparison("price", "gt", 10))).toBe("price > 10");
+  expect(await filterString(comparison("price", "gte", 10))).toBe(
+    "price >= 10",
+  );
+  expect(await filterString(comparison("price", "lt", 10))).toBe("price < 10");
+  expect(await filterString(comparison("price", "lte", 10))).toBe(
+    "price <= 10",
+  );
+  expect(await filterString(comparison("price", "between", [10, 100]))).toBe(
+    "price:10 TO 100",
+  );
+});
+
+test("only OR groups are parenthesised in Algolia's boolean grammar", async () => {
+  expect(
+    await filterString({
+      type: "and",
+      expressions: [
+        comparison("brand", "eq", "acme"),
+        {
+          type: "or",
+          expressions: [
+            comparison("price", "lt", 50),
+            comparison("price", "gt", 100),
+          ],
+        },
+      ],
+    }),
+  ).toBe('brand:"acme" AND (price < 50 OR price > 100)');
+});
+
+test("a single facet is negated without unsupported group parentheses", async () => {
+  expect(
+    await filterString({
+      type: "not",
+      expression: comparison("brand", "eq", "acme"),
+    }),
+  ).toBe('NOT brand:"acme"');
+});
+
+test("Algolia refuses boolean combinations its grammar cannot express before dispatch", async () => {
+  const filters: FilterExpression[] = [
+    {
+      type: "not",
+      expression: {
+        type: "or",
+        expressions: [
+          comparison("brand", "eq", "a"),
+          comparison("brand", "eq", "b"),
+        ],
+      },
+    },
+    {
+      type: "or",
+      expressions: [
+        comparison("brand", "eq", "a"),
+        {
+          type: "and",
+          expressions: [
+            comparison("brand", "eq", "b"),
+            comparison("price", "gt", 10),
+          ],
+        },
+      ],
+    },
+    {
+      type: "or",
+      expressions: [
+        comparison("brand", "eq", "a"),
+        comparison("price", "eq", 10),
+      ],
+    },
+  ];
+  for (const filter of filters) {
+    const fake = createAlgoliaFake();
+    await expect(searchWith(fake, { filter })).rejects.toThrowError(
+      UnsupportedSearchFeatureError,
+    );
+    expect(fake.calls).toEqual([]);
+  }
+});
+
+test("a comparison against text the engine cannot order is refused", async () => {
+  const error = await failed(filterString(comparison("price", "gt", "ten")));
+
+  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
+  expect(error).toHaveProperty("feature", "filters.gt");
+});
+
+test("an equality against a value with no filter spelling is refused", async () => {
+  const error = await failed(filterString(comparison("brand", "eq", null)));
+
+  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
+  expect(error).toHaveProperty("feature", "filters.eq");
+});
+
+test("a range missing a bound is refused rather than half applied", async () => {
+  const error = await failed(
+    filterString(comparison("price", "between", [10])),
+  );
+
+  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
+  expect(error).toHaveProperty("feature", "filters.between");
 });
