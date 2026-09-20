@@ -1,6 +1,10 @@
 import { insert, search } from "@orama/orama";
-import { searchKey } from "@priemskiyyy/scout";
-import type { AdapterSearchRequest } from "@priemskiyyy/scout";
+import { searchKey, UnsupportedSearchFeatureError } from "@priemskiyyy/scout";
+import type {
+  AdapterSearchRequest,
+  FilterExpression,
+  FilterOperator,
+} from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
 import { orama } from "src/orama";
 import {
@@ -45,6 +49,16 @@ const run = (
 const ids = (response: {
   hits: readonly { native: { id: string } }[];
 }): readonly string[] => response.hits.map((hit) => hit.native.id);
+
+const sortedIds = (response: {
+  hits: readonly { native: { id: string } }[];
+}): readonly string[] => [...ids(response)].sort();
+
+const comparison = (
+  field: string,
+  operator: FilterOperator,
+  value: unknown,
+): FilterExpression => ({ type: "comparison", field, operator, value });
 
 test("the fingerprint carries the corpus revision and nothing secret", () => {
   const adapter = adapterFor(createProductDatabase(), () => "v7");
@@ -158,4 +172,172 @@ test("a named sort is translated into Orama's own ordering", async () => {
   const response = await run(adapter, { sort: "priceDesc" });
 
   expect(ids(response)).toEqual(["p1", "p3", "p2", "p4", "p6", "p5"]);
+});
+
+test("an equality on an enum property matches the value and not its tokens", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const whole = await run(adapter, {
+    filter: comparison("brand", "eq", "Acme Audio"),
+  });
+  const token = await run(adapter, {
+    filter: comparison("brand", "eq", "Acme"),
+  });
+
+  expect(ids(whole)).toEqual(["p1", "p2"]);
+  expect(token.hits).toHaveLength(0);
+});
+
+test("a filter on a string property is refused rather than matched by token", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  await expect(
+    run(adapter, { filter: comparison("name", "eq", "Wireless Headphones") }),
+  ).rejects.toThrowError(/matches a string property by token/);
+});
+
+test("a filter on a property the schema never declared is refused", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  await expect(
+    run(adapter, { filter: comparison("colour", "eq", "black") }),
+  ).rejects.toThrowError(UnsupportedSearchFeatureError);
+});
+
+test("ordering an enum property is refused rather than guessed", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  await expect(
+    run(adapter, { filter: comparison("brand", "gt", "Acme Audio") }),
+  ).rejects.toThrowError(/order only a number property/);
+});
+
+test("an equality whose value the property cannot hold is refused", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  await expect(
+    run(adapter, { filter: comparison("price", "eq", "199") }),
+  ).rejects.toThrowError(/needs a number to apply eq/);
+});
+
+test("a range keeps only the documents inside it", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const response = await run(adapter, {
+    filter: {
+      type: "and",
+      expressions: [
+        comparison("price", "gte", 50),
+        comparison("price", "lte", 150),
+      ],
+    },
+  });
+
+  expect(sortedIds(response)).toEqual(["p2", "p3"]);
+});
+
+test("between bounds a number property at both ends", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const response = await run(adapter, {
+    filter: comparison("price", "between", [35, 99]),
+  });
+
+  expect(sortedIds(response)).toEqual(["p2", "p4", "p6"]);
+});
+
+test("a negated equality answers with the complement of the corpus", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const response = await run(adapter, {
+    filter: comparison("brand", "neq", "Acme Audio"),
+  });
+
+  expect(sortedIds(response)).toEqual(["p3", "p4", "p5", "p6"]);
+});
+
+test("in becomes a union and notIn its complement", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const inside = await run(adapter, {
+    filter: comparison("category", "in", ["input", "kitchen"]),
+  });
+  const outside = await run(adapter, {
+    filter: comparison("category", "not-in", ["input", "kitchen"]),
+  });
+
+  expect(sortedIds(inside)).toEqual(["p3", "p4", "p5", "p6"]);
+  expect(sortedIds(outside)).toEqual(["p1", "p2"]);
+});
+
+test("a union of equalities covers every kind Orama matches by value", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const numbers = await run(adapter, {
+    filter: comparison("price", "in", [15, 199]),
+  });
+  const booleans = await run(adapter, {
+    filter: comparison("inStock", "in", [false]),
+  });
+
+  expect(sortedIds(numbers)).toEqual(["p1", "p5"]);
+  expect(sortedIds(booleans)).toEqual(["p2", "p5"]);
+});
+
+test("or and not nest inside and", async () => {
+  const adapter = adapterFor(createProductDatabase());
+
+  const response = await run(adapter, {
+    filter: {
+      type: "and",
+      expressions: [
+        {
+          type: "or",
+          expressions: [
+            comparison("category", "eq", "input"),
+            comparison("category", "eq", "kitchen"),
+          ],
+        },
+        { type: "not", expression: comparison("inStock", "eq", false) },
+      ],
+    },
+  });
+
+  expect(sortedIds(response)).toEqual(["p3", "p4", "p6"]);
+});
+
+test("a contradiction answers without scanning the corpus", async () => {
+  const calls: unknown[] = [];
+  const counted = orama({
+    db: createProductDatabase(),
+    search: (_db, params) => {
+      calls.push(params);
+      return { count: 0, hits: [] };
+    },
+    revision: () => "1",
+    profiles: PRODUCT_PROFILES,
+    sorts: PRODUCT_SORTS,
+  });
+
+  const none = await counted.search(
+    request({ filter: { type: "constant", value: false }, facets: ["brand"] }),
+    { signal: new AbortController().signal },
+  );
+  const all = await run(adapterFor(createProductDatabase()), {
+    filter: { type: "constant", value: true },
+  });
+
+  // Orama has no contradiction to evaluate cheaply, so the answer is given
+  // here rather than paid for with a full scan.
+  expect(calls).toEqual([]);
+  expect(none.hits).toHaveLength(0);
+  expect(none.total).toEqual({ value: 0, accuracy: "exact", scope: "matches" });
+  expect(none.facets["brand"]).toEqual({
+    field: "brand",
+    values: [],
+    exhaustive: true,
+    native: null,
+  });
+  expect(none.native).toBeNull();
+  expect(all.hits).toHaveLength(6);
 });
