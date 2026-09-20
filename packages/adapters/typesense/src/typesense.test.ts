@@ -418,3 +418,208 @@ test("a facet value is coerced to the declared field type", async () => {
     count: 2,
   });
 });
+
+test("a highlight snippet becomes alternating parts and never markup", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.hits[0]?.highlights["name"]).toEqual([
+    {
+      path: ["name"],
+      truncated: "unknown",
+      parts: [
+        { text: "Trail running ", matched: false },
+        { text: "shoe", matched: true },
+      ],
+    },
+  ]);
+});
+
+// Typesense defaults to <mark>, which a document can contain. A balanced pair
+// in the document's own text parses cleanly, so with a fixed marker the
+// document's markup was reported as a match the engine never made.
+test("a document carrying a balanced marker pair cannot forge a match", async () => {
+  const { adapter } = setup({
+    respond: (response, parameters) => ({
+      ...response,
+      hits: response.hits.slice(0, 1).map((hit) => ({
+        ...hit,
+        highlights: [
+          {
+            field: "name",
+            // The engine marked "shoe". The "<mark>forged</mark>" is the
+            // document's own text, which Typesense did not match.
+            snippet:
+              `${parameters.highlight_start_tag}shoe` +
+              `${parameters.highlight_end_tag} and <mark>forged</mark>`,
+            matched_tokens: ["shoe"],
+          },
+        ],
+      })),
+    }),
+  });
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+  const parts = response.hits[0]?.highlights["name"]?.[0]?.parts ?? [];
+
+  expect(parts.filter((part) => part.matched).map((part) => part.text)).toEqual(
+    ["shoe"],
+  );
+  // The document's markup survives as ordinary text, because stripping it
+  // would corrupt the document.
+  expect(parts.map((part) => part.text).join("")).toBe(
+    "shoe and <mark>forged</mark>",
+  );
+  adapter.dispose();
+});
+
+test("a highlight keeps astral characters and combining marks whole", async () => {
+  const { adapter } = setup({
+    respond: (response, parameters) => ({
+      ...response,
+      hits: response.hits.slice(0, 1).map((hit) => ({
+        ...hit,
+        highlights: [
+          {
+            field: "name",
+            snippet: `\u{1F468}‍\u{1F469}‍\u{1F467} ${parameters.highlight_start_tag}é${parameters.highlight_end_tag}\u{1F1FA}\u{1F1E6} tail`,
+            matched_tokens: ["é"],
+          },
+        ],
+      })),
+    }),
+  });
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+  const parts = response.hits[0]?.highlights["name"]?.[0]?.parts ?? [];
+
+  expect(parts).toEqual([
+    { text: "\u{1F468}‍\u{1F469}‍\u{1F467} ", matched: false },
+    { text: "é", matched: true },
+    { text: "\u{1F1FA}\u{1F1E6} tail", matched: false },
+  ]);
+  // A cut inside a surrogate pair would leave a lone half here.
+  expect([...(parts[0]?.text ?? "")]).toHaveLength(6);
+  expect([...(parts[2]?.text ?? "")]).toHaveLength(7);
+});
+
+test("an array field reports which element matched", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(request({ highlights: ["tags"] }), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.hits[0]?.highlights["tags"]).toEqual([
+    {
+      path: ["tags", 1],
+      truncated: "unknown",
+      parts: [{ text: "shoe", matched: true }],
+    },
+  ]);
+});
+
+test("a whole value is not truncated and a snippet does not say", async () => {
+  const { adapter } = setup({
+    respond: (response, parameters) => {
+      const open = parameters.highlight_start_tag ?? "";
+      const close = parameters.highlight_end_tag ?? "";
+      return {
+        ...response,
+        hits: response.hits.slice(0, 1).map((hit) => ({
+          ...hit,
+          highlights: [
+            {
+              field: "name",
+              value: `Trail running ${open}shoe${close}`,
+              snippet: `running ${open}shoe${close}`,
+              matched_tokens: ["shoe"],
+            },
+          ],
+        })),
+      };
+    },
+  });
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.hits[0]?.highlights["name"]?.[0]?.truncated).toBe(false);
+});
+
+test("an unbalanced marker degrades to one unmatched part of plain text", async () => {
+  const degrade = async (
+    build: (markers: { open: string; close: string }) => string,
+  ) => {
+    const { adapter } = setup({
+      respond: (response, parameters) => ({
+        ...response,
+        hits: response.hits.slice(0, 1).map((hit) => ({
+          ...hit,
+          highlights: [
+            {
+              field: "name",
+              snippet: build({
+                open: parameters.highlight_start_tag ?? "",
+                close: parameters.highlight_end_tag ?? "",
+              }),
+              matched_tokens: [],
+            },
+          ],
+        })),
+      }),
+    });
+    const response = await adapter.search(request({ highlights: ["name"] }), {
+      signal: new AbortController().signal,
+    });
+    return response.hits[0]?.highlights["name"]?.[0]?.parts;
+  };
+
+  expect(
+    await degrade(({ open, close }) => `a ${open}b${close} c ${open} d`),
+  ).toEqual([{ text: "a b c  d", matched: false }]);
+  expect(await degrade(({ close }) => `${close}oops`)).toEqual([
+    { text: "oops", matched: false },
+  ]);
+});
+
+test("a document that carries markup never leaves markup in a part", async () => {
+  const { adapter } = setup({
+    respond: (response, parameters) => {
+      const open = parameters.highlight_start_tag ?? "";
+      const close = parameters.highlight_end_tag ?? "";
+      return {
+        ...response,
+        hits: response.hits.slice(0, 1).map((hit) => ({
+          ...hit,
+          highlights: [
+            {
+              field: "name",
+              snippet: `${open}shoe${close} <img onerror=x> ${close}`,
+              matched_tokens: ["shoe"],
+            },
+          ],
+        })),
+      };
+    },
+  });
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+
+  for (const part of response.hits[0]?.highlights["name"]?.[0]?.parts ?? []) {
+    expect(part.text).not.toMatch(/<\/?mark\b/i);
+  }
+});
+
+test("only the highlights that were asked for are reported", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(request({ highlights: ["name"] }), {
+    signal: new AbortController().signal,
+  });
+
+  expect(Object.keys(response.hits[0]?.highlights ?? {})).toEqual(["name"]);
+});
