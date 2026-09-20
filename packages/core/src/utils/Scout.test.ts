@@ -1,5 +1,6 @@
 import { expect, test, vi } from "vitest";
 import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
+import { SearchDisposedError } from "src/errors/SearchDisposedError";
 import { SearchValidationError } from "src/errors/SearchValidationError";
 import { UnsupportedSearchFeatureError } from "src/errors/UnsupportedSearchFeatureError";
 import { createMockSearchAdapter } from "src/mock/createMockSearchAdapter";
@@ -378,4 +379,122 @@ test("a between with its bounds the wrong way round is refused", async () => {
     products.search("shoe").where((product) => product.price.between(50, 300)),
   ).not.toThrow();
   expect(mock.requests).toHaveLength(0);
+});
+
+test("an unknown index name names the ones that exist, quoted", () => {
+  const { scout } = build(answerWith([]));
+
+  // The compiler already refuses this. The runtime guard is what a JavaScript
+  // caller, or a name built from a string at runtime, still runs into. The
+  // names are quoted because one can be empty or carry spaces, and an unquoted
+  // one disappears into the sentence.
+  // @ts-expect-error there is no index called nope
+  expect(() => scout.index("nope")).toThrowError(
+    'There is no index named "nope". The declared indexes are "products".',
+  );
+});
+
+test("a Scout with no indexes says so rather than trailing off", () => {
+  const scout = new Scout({ indexes: {} });
+
+  // @ts-expect-error there is no index at all on this Scout
+  expect(() => scout.index("products")).toThrowError(
+    'There is no index named "products". This Scout was constructed with no indexes.',
+  );
+});
+
+test("a disposed Scout refuses new searches", async () => {
+  const { scout, products } = build(answerWith([]));
+  scout.dispose();
+
+  await expect(products.search("shoe").execute()).rejects.toThrowError(
+    SearchDisposedError,
+  );
+});
+
+test("disposal can be called twice", () => {
+  const { scout } = build(answerWith([]));
+
+  scout.dispose();
+  expect(() => scout.dispose()).not.toThrow();
+});
+
+test("changing the supplied registry cannot reroute an existing Scout", async () => {
+  const original = build(answerWith([product({ id: "original" })]));
+  const replacement = build(answerWith([product({ id: "replacement" })]));
+  const indexes = { products: original.declaration };
+  const scout = new Scout({ indexes });
+
+  indexes.products = replacement.declaration;
+  const result = await scout.index("products").search("shoe").execute();
+
+  expect(result.hits.map((hit) => hit.id)).toEqual(["original"]);
+  expect(replacement.mock.requests).toHaveLength(0);
+});
+
+test("disposal releases the original registry even after the caller replaces it", async () => {
+  const original = build();
+  const replacement = build();
+  const indexes = { products: original.declaration };
+  const scout = new Scout({ indexes });
+
+  indexes.products = replacement.declaration;
+  scout.dispose();
+
+  await expect(original.products.search("shoe").execute()).rejects.toThrowError(
+    SearchDisposedError,
+  );
+  await expect(
+    replacement.products.search("shoe").execute(),
+  ).resolves.toMatchObject({
+    hits: [],
+  });
+});
+
+test("cleanup continues after a failure and rethrows the original error", () => {
+  const first = build();
+  const second = build();
+  const failure = new Error("first cleanup failed");
+  const firstCleanup = vi
+    .spyOn(first.mock.adapter, "dispose")
+    .mockImplementation(() => {
+      throw failure;
+    });
+  const secondCleanup = vi.spyOn(second.mock.adapter, "dispose");
+  const scout = new Scout({
+    indexes: { first: first.declaration, second: second.declaration },
+  });
+  let thrown: unknown;
+
+  try {
+    scout.dispose();
+  } catch (error) {
+    thrown = error;
+  }
+
+  expect(thrown).toBe(failure);
+  expect(firstCleanup).toHaveBeenCalledExactlyOnceWith();
+  expect(secondCleanup).toHaveBeenCalledExactlyOnceWith();
+  expect(() => scout.dispose()).not.toThrow();
+  expect(firstCleanup).toHaveBeenCalledTimes(1);
+  expect(secondCleanup).toHaveBeenCalledTimes(1);
+});
+
+test("cleanup collects every failure in index order", () => {
+  const first = build();
+  const second = build();
+  const errors = [new Error("first"), new Error("second")];
+  vi.spyOn(first.mock.adapter, "dispose").mockImplementation(() => {
+    throw errors[0];
+  });
+  vi.spyOn(second.mock.adapter, "dispose").mockImplementation(() => {
+    throw errors[1];
+  });
+  const scout = new Scout({
+    indexes: { first: first.declaration, second: second.declaration },
+  });
+
+  expect(() => scout.dispose()).toThrowError(
+    expect.objectContaining({ name: "AggregateError", errors }),
+  );
 });
