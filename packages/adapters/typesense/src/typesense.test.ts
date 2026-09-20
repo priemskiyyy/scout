@@ -192,3 +192,133 @@ test("a range comparison against a string is refused rather than guessed", async
     filterFor(field("price", "between", ["a", "b"])),
   ).rejects.toThrowError(SearchConfigurationError);
 });
+
+test("a contradiction answers empty without asking the engine", async () => {
+  const { fake, adapter } = setup();
+  const response = await adapter.search(
+    request({ filter: { type: "constant", value: false }, facets: ["brand"] }),
+    { signal: new AbortController().signal },
+  );
+
+  expect(fake.calls).toHaveLength(0);
+  expect(response.hits).toHaveLength(0);
+  expect(response.total).toEqual({
+    value: 0,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  // Nothing matched, so the counting was trivially complete. Reporting no
+  // facets at all would make the core call a settled question unknown.
+  expect(response.facets["brand"]).toEqual({
+    field: "brand",
+    values: [],
+    exhaustive: true,
+    native: null,
+  });
+  expect(response.native).toBeNull();
+  expect(response.took).toBeNull();
+});
+
+test("a contradiction inside an and makes the whole filter match nothing", async () => {
+  const { fake, adapter } = setup();
+  await adapter.search(
+    request({
+      filter: {
+        type: "and",
+        expressions: [
+          field("brand", "eq", "Nimbus"),
+          { type: "constant", value: false },
+        ],
+      },
+    }),
+    { signal: new AbortController().signal },
+  );
+
+  expect(fake.calls).toHaveLength(0);
+});
+
+test("a tautology inside an or drops the rest of the group", async () => {
+  expect(
+    await filterFor({
+      type: "or",
+      expressions: [
+        field("brand", "eq", "Nimbus"),
+        { type: "constant", value: true },
+      ],
+    }),
+  ).toBeUndefined();
+});
+
+test("a filter that restricts nothing sends no filter_by", async () => {
+  expect(await filterFor({ type: "constant", value: true })).toBeUndefined();
+});
+
+test("the profile decides query_by and prefix, and the sort decides sort_by", async () => {
+  const withSort = await sentFor({ sort: "priceAsc" });
+  const plain = await sentFor({ profile: "plain" });
+
+  expect(withSort?.query_by).toBe("name,brand,tags");
+  expect(withSort?.prefix).toBe(true);
+  expect(withSort?.sort_by).toBe("price:asc");
+  expect(plain?.query_by).toBe("name");
+  expect(plain?.prefix).toBeUndefined();
+  // "relevance" declares no sort_by, so Typesense keeps its own ranking.
+  expect(plain?.sort_by).toBeUndefined();
+});
+
+test("an undeclared sort or profile is a configuration error", async () => {
+  await expect(sentFor({ sort: "missing" })).rejects.toThrowError(
+    SearchConfigurationError,
+  );
+  await expect(sentFor({ profile: "missing" })).rejects.toThrowError(
+    SearchConfigurationError,
+  );
+});
+
+test("facets, highlights, the page and the page size reach their parameters", async () => {
+  const sent = await sentFor({
+    facets: ["brand", "price"],
+    highlights: ["name"],
+    page: { current: 3, size: 25 },
+  });
+
+  expect(sent?.facet_by).toBe("brand,price");
+  expect(sent?.highlight_fields).toBe("name");
+  // Minted per search, so the test asserts the shape and the pairing rather
+  // than a literal. A fixed marker is what let a document forge a match.
+  expect(sent?.highlight_start_tag).toMatch(/^\[scout:[0-9a-z-]+\]$/);
+  expect(sent?.highlight_end_tag).toBe(
+    sent?.highlight_start_tag?.replace("[scout:", "[/scout:"),
+  );
+  // Typesense pages are one based like Scout's, so nothing is shifted.
+  expect(sent?.page).toBe(3);
+  expect(sent?.per_page).toBe(25);
+});
+
+test("nothing is highlighted or faceted when nothing was asked for", async () => {
+  const sent = await sentFor({});
+
+  expect(sent?.facet_by).toBeUndefined();
+  expect(sent?.highlight_fields).toBeUndefined();
+});
+
+test("the page size Typesense refuses is the one the capabilities cap", async () => {
+  const { adapter } = setup();
+
+  expect(adapter.capabilities.pagination.maxPageSize).toBe(250);
+  expect(adapter.capabilities.cancellation).toBe("transport");
+  expect(adapter.capabilities.highlights).toBe("parts");
+});
+
+test("an empty query is sent as the Typesense wildcard", async () => {
+  expect((await sentFor({ query: "" }))?.q).toBe("*");
+  expect((await sentFor({ query: "shoe" }))?.q).toBe("shoe");
+});
+
+test("the signal reaches the client, which is what transport cancellation means", async () => {
+  const { fake, adapter } = setup();
+  const controller = new AbortController();
+  await adapter.search(request(), { signal: controller.signal });
+
+  expect(fake.signals[0]).toBe(controller.signal);
+});
