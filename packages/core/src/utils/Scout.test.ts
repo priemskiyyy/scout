@@ -498,3 +498,57 @@ test("cleanup collects every failure in index order", () => {
     expect.objectContaining({ name: "AggregateError", errors }),
   );
 });
+
+test("two searches that mean the same thing share a key, and a different one does not", () => {
+  const { products } = build(answerWith([]));
+  const left = products
+    .search("shoe")
+    .where((p) => p.brand.in(["Bose", "Sony"]))
+    .facets("brand");
+  const right = products
+    .search("shoe")
+    .where((p) => p.brand.in(["Sony", "Bose"]))
+    .facets("brand");
+  const other = products.search("shoe").where((p) => p.brand.in(["Sony"]));
+
+  expect(left.key()).toEqual(right.key());
+  expect(left.key()).not.toEqual(other.key());
+});
+
+test("page size is part of the identity", () => {
+  const { products } = build(answerWith([]));
+
+  expect(products.search("a").pageSize(10).key()).not.toEqual(
+    products.search("a").pageSize(20).key(),
+  );
+});
+
+test("took reports the provider's own time when it gave one", async () => {
+  const { products } = build(answerWith([], { took: 7 }));
+
+  const result = await products.search("shoe").execute();
+
+  expect(result.took).toEqual({ milliseconds: 7, source: "provider" });
+});
+
+test("took falls back to Scout's own measurement", async () => {
+  const { products } = build(answerWith([]));
+
+  const result = await products.search("shoe").execute();
+
+  expect(result.took.source).toBe("scout");
+});
+
+// A wall clock steps backwards when it is corrected, which reported the
+// search as having taken a negative number of milliseconds. The measurement
+// is monotonic instead.
+test("a clock that steps backwards cannot produce a negative duration", async () => {
+  const { products } = build(answerWith([]));
+  const stopped = Date.now();
+  vi.spyOn(Date, "now").mockImplementation(() => stopped - 60_000);
+
+  const result = await products.search("shoe").execute();
+
+  expect(result.took.source).toBe("scout");
+  expect(result.took.milliseconds).toBeGreaterThanOrEqual(0);
+});
