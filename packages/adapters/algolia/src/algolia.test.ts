@@ -362,3 +362,195 @@ test("a range missing a bound is refused rather than half applied", async () => 
   expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
   expect(error).toHaveProperty("feature", "filters.between");
 });
+
+test("a true constant sends no filter at all", async () => {
+  const fake = createAlgoliaFake();
+
+  await searchWith(fake);
+
+  expect(paramsOf(fake)).not.toHaveProperty("filters");
+});
+
+test("a match all constant inside an or still matches everything", async () => {
+  const fake = createAlgoliaFake();
+
+  await searchWith(fake, {
+    filter: {
+      type: "or",
+      expressions: [
+        comparison("brand", "eq", "acme"),
+        { type: "constant", value: true },
+      ],
+    },
+  });
+
+  expect(paramsOf(fake)).not.toHaveProperty("filters");
+});
+
+test("a match none constant inside an and matches nothing", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    filter: {
+      type: "and",
+      expressions: [
+        comparison("brand", "eq", "acme"),
+        { type: "constant", value: false },
+      ],
+    },
+  });
+
+  expect(fake.calls).toHaveLength(0);
+  expect(response.hits).toEqual([]);
+});
+
+test("a neutral constant inside a group leaves the other term alone", async () => {
+  expect(
+    await filterString({
+      type: "and",
+      expressions: [
+        comparison("brand", "eq", "acme"),
+        { type: "constant", value: true },
+      ],
+    }),
+  ).toBe('brand:"acme"');
+});
+
+test("a false constant answers empty without paying for a query", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    filter: { type: "constant", value: false },
+    facets: ["brand"],
+  });
+
+  expect(fake.calls).toHaveLength(0);
+  expect(response.hits).toEqual([]);
+  // Zero matches is a count of matches rather than of what pagination could
+  // reach, and a contradiction leaves nothing to be uncertain about.
+  expect(response.total).toEqual({
+    value: 0,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect(response.native).toBeNull();
+  expect(response.facets.brand).toEqual({
+    field: "brand",
+    values: [],
+    exhaustive: true,
+    native: null,
+  });
+});
+
+test("scout page one is sent as algolia page zero", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, { page: { current: 1, size: 2 } });
+
+  expect(paramsOf(fake)?.page).toBe(0);
+  expect(paramsOf(fake)?.hitsPerPage).toBe(2);
+  expect(response.page.current).toBe(1);
+  expect(response.page.previous).toBeNull();
+});
+
+test("a later page is translated back into scout's numbering", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    page: { current: 2, size: 2 },
+    query: "",
+  });
+
+  expect(paramsOf(fake)?.page).toBe(1);
+  expect(response.page.current).toBe(2);
+  expect(response.page.previous).toBe(1);
+  expect(response.page.next).toBe(3);
+});
+
+test("pagination stops at the last page the limit can reach", async () => {
+  const fake = createAlgoliaFake({ pagination: { nbHits: 100, nbPages: 50 } });
+
+  const response = await searchWith(
+    fake,
+    { page: { current: 2, size: 2 }, query: "" },
+    { paginationLimitedTo: 4 },
+  );
+
+  expect(response.page.next).toBeNull();
+});
+
+test("matches past the limit are counted as matches, not as retrievable", async () => {
+  const fake = createAlgoliaFake({ pagination: { nbHits: 100, nbPages: 50 } });
+
+  const response = await searchWith(
+    fake,
+    { page: { current: 1, size: 2 }, query: "" },
+    { paginationLimitedTo: 4 },
+  );
+
+  expect(response.total).toEqual({
+    value: 100,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect(response.page.next).toBe(2);
+});
+
+test("an approximated count is reported as estimated", async () => {
+  const fake = createAlgoliaFake({ exhaustive: { nbHits: false } });
+
+  const response = await searchWith(fake, { query: "" });
+
+  expect(response.total).toEqual({
+    value: 5,
+    accuracy: "estimated",
+    scope: "retrievable",
+  });
+});
+
+test("a count algolia said nothing about is unknown, not exact", async () => {
+  const fake = createAlgoliaFake({ exhaustive: null });
+
+  const response = await searchWith(fake, { query: "" });
+
+  expect(response.total).toEqual({ accuracy: "unknown", scope: "retrievable" });
+});
+
+test("a response with no counts at all keeps its uncertainty", async () => {
+  const bare: AlgoliaSearchClient = {
+    searchSingleIndex: () => Promise.resolve({ hits: [] }),
+    searchSingleIndexWithHTTPInfo: () =>
+      Promise.resolve({ data: { hits: [] } }),
+  };
+
+  const response = await adapterFor(bare).search(request(), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
+  expect(response.page.next).toBe("unknown");
+  expect(response.took).toBeNull();
+});
+
+test("facet buckets carry their counts and algolia's own exhaustiveness", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, { query: "", facets: ["brand"] });
+
+  expect(paramsOf(fake)?.facets).toEqual(["brand"]);
+  expect(response.facets.brand?.values).toEqual([
+    { value: "acme", count: 2 },
+    { value: "bolt", count: 1 },
+    { value: "mug co", count: 1 },
+    { value: "forge", count: 1 },
+  ]);
+  expect(response.facets.brand?.exhaustive).toBe(true);
+});
+
+test("a facet algolia said nothing about is unknown rather than exhaustive", async () => {
+  const fake = createAlgoliaFake({ exhaustive: { nbHits: true } });
+
+  const response = await searchWith(fake, { query: "", facets: ["brand"] });
+
+  expect(response.facets.brand?.exhaustive).toBe("unknown");
+});
