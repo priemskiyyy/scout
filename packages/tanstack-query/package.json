@@ -1,0 +1,58 @@
+{
+  "name": "@priemskiyyy/scout-tanstack-query",
+  "version": "0.1.0",
+  "description": "TanStack Query integration for Scout: query and infinite query options built from a search builder, with cancellation wired through, a page key that cannot collide, and de-duplicated hits.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/priemskiyyy/scout.git",
+    "directory": "packages/tanstack-query"
+  },
+  "bugs": {
+    "url": "https://github.com/priemskiyyy/scout/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../.. --project tanstack-query"
+  },
+  "keywords": [
+    "search",
+    "full-text-search",
+    "tanstack-query",
+    "react-query",
+    "infinite-query",
+    "pagination",
+    "typescript",
+    "scout",
+    "react-native"
+  ],
+  "homepage": "https://priemskiyyy.github.io/scout/",
+  "peerDependencies": {
+    "@priemskiyyy/scout": ">=0.1.0 <0.2",
+    "@tanstack/query-core": ">=5 <6"
+  },
+  "devDependencies": {
+    "@priemskiyyy/scout": "workspace:*"
+  }
+}
