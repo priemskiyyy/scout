@@ -1,0 +1,47 @@
+{
+  "name": "scout-workspace",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.13.1",
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "scripts": {
+    "build": "pnpm -r --filter './packages/*' --filter './packages/adapters/*' build",
+    "format": "prettier --write .",
+    "lint:prettier": "prettier --check .",
+    "lint:typescript": "tsc --noEmit && pnpm -r lint:typescript",
+    "lint:eslint": "eslint .",
+    "test:unit": "vitest run",
+    "test:unit:watch": "vitest",
+    "dev:docs": "vitepress dev docs",
+    "build:docs": "vitepress build docs",
+    "lint:docs": "vue-tsc --noEmit -p docs/tsconfig.json",
+    "check": "pnpm build && pnpm lint:typescript && pnpm lint:eslint && pnpm lint:prettier && pnpm test:unit && pnpm test:mutation && pnpm -r --filter './examples/*' build",
+    "test:mutation": "node scripts/mutate.mjs",
+    "test:package": "node scripts/verify-packages.mjs",
+    "verify:release": "node scripts/verify-release.mjs",
+    "check:release": "pnpm check && pnpm run --if-present build:docs && pnpm test:package && pnpm verify:release"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.39.4",
+    "@orama/orama": "3.1.18",
+    "@tanstack/query-core": "5.103.1",
+    "@tanstack/react-query": "5.103.1",
+    "@types/node": "22.20.2",
+    "algoliasearch": "5.59.0",
+    "eslint": "9.39.4",
+    "fuse.js": "7.5.0",
+    "meilisearch": "0.62.0",
+    "minisearch": "7.2.0",
+    "prettier": "3.9.6",
+    "publint": "0.3.24",
+    "tsdown": "0.22.14",
+    "typescript": "5.8.3",
+    "typescript-eslint": "8.70.0",
+    "typesense": "3.0.6",
+    "vitepress": "1.6.4",
+    "vitest": "4.1.10",
+    "vue-tsc": "3.3.11"
+  }
+}
