@@ -355,3 +355,92 @@ test("a contradiction answers without asking the engine", async () => {
   expect(response.native).toBeNull();
   adapter.dispose();
 });
+
+// Every sort name reaching the adapter is one its index declared, and an index
+// requires the adapter to cover all of them, so an uncovered name is a hole in
+// this configuration rather than an order MiniSearch cannot produce. Naming
+// what was configured is the fix.
+test("a sort the adapter was not configured with is a configuration error", async () => {
+  const adapter = createAdapter();
+
+  const failure = search(adapter, { sort: "price-asc" });
+
+  await expect(failure).rejects.toThrowError(SearchConfigurationError);
+  await expect(failure).rejects.toThrowError(
+    "The minisearch adapter has no price-asc entry in its sorts. It was configured with relevance.",
+  );
+  await expect(failure).rejects.toMatchObject({ path: "sorts.price-asc" });
+  adapter.dispose();
+});
+
+test("a declared sort name may alias relevance", async () => {
+  const adapter = minisearch({
+    index: createProductIndex(),
+    revision: () => "v1",
+    profiles: PROFILES,
+    sorts: { best: "relevance" },
+  });
+
+  const response = await search(adapter, { sort: "best" });
+
+  expect(idsOf(response.hits)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
+  adapter.dispose();
+});
+
+test("a profile the adapter was not configured with is a configuration error", async () => {
+  const adapter = createAdapter();
+
+  await expect(
+    search(adapter, { profile: "autocomplete" }),
+  ).rejects.toThrowError(SearchConfigurationError);
+  adapter.dispose();
+});
+
+test("the profile shapes the query and native options override it", async () => {
+  const recording = recordingIndex(createProductIndex());
+  const adapter = minisearch({
+    index: recording.index,
+    revision: () => "v1",
+    profiles: { default: { fields: ["category"], prefix: true } },
+    sorts: SORTS,
+  });
+
+  const narrow = await search(adapter);
+  const widened = await adapter.search(
+    { ...request(), provider: { fields: ["title"] } },
+    { signal: new AbortController().signal },
+  );
+
+  expect(narrow.hits).toEqual([]);
+  expect(recording.calls[0]?.options?.fields).toEqual(["category"]);
+  expect(idsOf(widened.hits)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
+  expect(recording.calls[1]?.options?.fields).toEqual(["title"]);
+  expect(recording.calls[1]?.options?.prefix).toBe(true);
+  adapter.dispose();
+});
+
+test("it reports nothing it cannot measure or produce", async () => {
+  const adapter = createAdapter();
+  const response = await search(adapter);
+
+  expect(response.facets).toEqual({});
+  expect(response.took).toBeNull();
+  for (const hit of response.hits) {
+    expect(hit.highlights).toEqual({});
+  }
+  adapter.dispose();
+});
+
+test("the raw MiniSearch answer is preserved on the hit and on the response", async () => {
+  const adapter = createAdapter();
+  const response = await search(adapter, { page: { current: 1, size: 2 } });
+
+  expect(response.native).toHaveLength(5);
+  expect(response.native?.[0]).toBe(response.hits[0]?.native);
+  expect(typeof response.hits[0]?.native.score).toBe("number");
+  expect(response.hits[0]?.native.match).toBeTypeOf("object");
+  expect(Object.values(response.hits[0]?.native.match ?? {}).flat()).toContain(
+    "title",
+  );
+  adapter.dispose();
+});
