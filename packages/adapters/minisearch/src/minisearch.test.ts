@@ -2,6 +2,7 @@ import { SearchConfigurationError } from "@priemskiyyy/scout";
 import type {
   AdapterSearchRequest,
   FilterExpression,
+  FilterOperator,
   SearchAdapter,
 } from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
@@ -10,6 +11,7 @@ import type { MiniSearchIndex } from "src/types/MiniSearchIndex";
 import type { MiniSearchOptions } from "src/types/MiniSearchOptions";
 import type { MiniSearchProfile } from "src/types/MiniSearchProfile";
 import type { MiniSearchResult } from "src/types/MiniSearchResult";
+import type { MiniSearchSearchOptions } from "src/types/MiniSearchSearchOptions";
 import {
   createProductIndex,
   PRODUCTS,
@@ -39,6 +41,12 @@ const request = (
   ...overrides,
 });
 
+const comparison = (
+  field: string,
+  operator: FilterOperator,
+  value: unknown,
+): FilterExpression => ({ type: "comparison", field, operator, value });
+
 const createAdapter = () =>
   minisearch({
     index: createProductIndex(),
@@ -64,6 +72,23 @@ const search = (
 
 const idsOf = (hits: readonly { native: MiniSearchResult }[]): string[] =>
   hits.map((hit) => String(hit.native.id)).sort();
+
+/** Wraps an instance so a test can assert what reached the engine. */
+const recordingIndex = (index: MiniSearchIndex) => {
+  const calls: {
+    query: string;
+    options: MiniSearchSearchOptions | undefined;
+  }[] = [];
+  return {
+    calls,
+    index: {
+      search: (query: string, options?: MiniSearchSearchOptions) => {
+        calls.push({ query, options });
+        return index.search(query, options);
+      },
+    },
+  };
+};
 
 test("it declares only what MiniSearch can actually do", () => {
   const adapter = createAdapter();
@@ -209,5 +234,124 @@ test("the total counts every match rather than the page, and says so exactly", a
     accuracy: "exact",
     scope: "matches",
   });
+  adapter.dispose();
+});
+
+test("a filter narrows every match, not the page that came back", async () => {
+  const adapter = createAdapter();
+  const filter = comparison("category", "eq", "footwear");
+
+  const first = await search(adapter, {
+    filter,
+    page: { current: 1, size: 2 },
+  });
+  const second = await search(adapter, {
+    filter,
+    page: { current: 2, size: 2 },
+  });
+
+  // Three footwear products match. A predicate applied to one returned page
+  // would have left the total at five and page two empty.
+  expect(first.total).toEqual({
+    value: 3,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect(second.hits).toHaveLength(1);
+  expect([...idsOf(first.hits), ...idsOf(second.hits)].sort()).toEqual([
+    "p1",
+    "p2",
+    "p3",
+  ]);
+  adapter.dispose();
+});
+
+test("every portable operator is translated into the predicate", async () => {
+  const adapter = createAdapter();
+  const matching = async (filter: FilterExpression) =>
+    idsOf((await search(adapter, { filter })).hits);
+
+  expect(await matching(comparison("category", "neq", "footwear"))).toEqual([
+    "p4",
+    "p5",
+  ]);
+  expect(
+    await matching(comparison("category", "in", ["care", "storage"])),
+  ).toEqual(["p4", "p5"]);
+  expect(
+    await matching(comparison("category", "not-in", ["footwear"])),
+  ).toEqual(["p4", "p5"]);
+  expect(await matching(comparison("price", "gt", 100))).toEqual(["p2", "p3"]);
+  expect(await matching(comparison("price", "gte", 140))).toEqual(["p2", "p3"]);
+  expect(await matching(comparison("price", "lt", 45))).toEqual(["p4"]);
+  expect(await matching(comparison("price", "lte", 45))).toEqual(["p4", "p5"]);
+  expect(await matching(comparison("price", "between", [10, 100]))).toEqual([
+    "p1",
+    "p5",
+  ]);
+  // A repeated field answers when any element answers.
+  expect(await matching(comparison("tags", "eq", "sale"))).toEqual([
+    "p1",
+    "p4",
+    "p5",
+  ]);
+  adapter.dispose();
+});
+
+test("filters compose with and, or and not", async () => {
+  const adapter = createAdapter();
+  const matching = async (filter: FilterExpression) =>
+    idsOf((await search(adapter, { filter })).hits);
+
+  expect(
+    await matching({
+      type: "and",
+      expressions: [
+        comparison("category", "eq", "footwear"),
+        comparison("price", "lt", 150),
+      ],
+    }),
+  ).toEqual(["p1", "p2"]);
+  expect(
+    await matching({
+      type: "or",
+      expressions: [
+        comparison("category", "eq", "care"),
+        comparison("category", "eq", "storage"),
+      ],
+    }),
+  ).toEqual(["p4", "p5"]);
+  expect(
+    await matching({
+      type: "not",
+      expression: comparison("tags", "eq", "sale"),
+    }),
+  ).toEqual(["p2", "p3"]);
+  adapter.dispose();
+});
+
+test("a contradiction answers without asking the engine", async () => {
+  const recording = recordingIndex(createProductIndex());
+  const adapter = minisearch({
+    index: recording.index,
+    revision: () => "v1",
+    profiles: PROFILES,
+    sorts: SORTS,
+  });
+
+  const response = await search(adapter, {
+    filter: { type: "constant", value: false },
+  });
+
+  expect(recording.calls).toEqual([]);
+  expect(response.hits).toEqual([]);
+  expect(response.total).toEqual({
+    value: 0,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  // MiniSearch was never asked, so there is no result array of its own to hand
+  // back. An empty one would read as an answer it gave.
+  expect(response.native).toBeNull();
   adapter.dispose();
 });
