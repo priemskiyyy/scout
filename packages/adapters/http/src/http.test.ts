@@ -10,7 +10,7 @@ import type {
 import { expect, test, vi } from "vitest";
 import { http } from "src/http";
 import type { HttpCapabilities } from "src/types/HttpCapabilities";
-import { createSearchBackend } from "src/http.fixture";
+import { createSearchBackend, PRODUCTS } from "src/http.fixture";
 import type { FixtureBackend } from "src/http.fixture";
 import { scoutWireRequest } from "src/scoutWireRequest";
 import { scoutWireResponse } from "src/scoutWireResponse";
@@ -414,4 +414,221 @@ test("the declared capabilities travel as given, and fetch really cancels", () =
       fromResponse: scoutWireResponse,
     }).capabilities.cancellation,
   ).toBe("logical");
+});
+
+test("the scout wire response round trips every field it describes", async () => {
+  const hit = {
+    document: { id: "1", title: "Trail running shoe" },
+    highlights: {
+      title: [
+        {
+          parts: [
+            { text: "Trail running ", matched: false },
+            { text: "shoe", matched: true },
+          ],
+          truncated: false,
+        },
+      ],
+    },
+    score: 2.5,
+  };
+  const body = {
+    hits: [hit],
+    total: { value: 40, accuracy: "estimated", scope: "retrievable" },
+    facets: {
+      brand: { values: [{ value: "Apex", count: 12 }], exhaustive: false },
+    },
+    took: 7,
+    hasMore: true,
+  };
+  const backend = createSearchBackend({ body: JSON.stringify(body) });
+
+  const response = await run(wireAdapter(backend), {
+    page: { current: 2, size: 5 },
+  });
+
+  expect(response.hits).toEqual([
+    {
+      document: { id: "1", title: "Trail running shoe" },
+      highlights: {
+        title: [
+          {
+            path: ["title"],
+            parts: [
+              { text: "Trail running ", matched: false },
+              { text: "shoe", matched: true },
+            ],
+            truncated: false,
+          },
+        ],
+      },
+      native: hit,
+    },
+  ]);
+  expect(response.total).toEqual({
+    value: 40,
+    accuracy: "estimated",
+    scope: "retrievable",
+  });
+  // `hasMore` is the backend's own answer, so it wins over the total.
+  expect(response.page).toEqual({
+    kind: "page",
+    current: 2,
+    size: 5,
+    next: 3,
+    previous: 1,
+  });
+  expect(response.facets.brand).toEqual({
+    field: "brand",
+    values: [{ value: "Apex", count: 12 }],
+    exhaustive: false,
+    native: body.facets.brand,
+  });
+  expect(response.took).toBe(7);
+  expect(response.native).toEqual(body);
+});
+
+test("a counted total decides the next page when the backend does not", async () => {
+  const body = JSON.stringify({
+    hits: [],
+    total: { value: 30, accuracy: "exact" },
+  });
+
+  const first = await run(wireAdapter(createSearchBackend({ body })), {
+    page: { current: 1, size: 10 },
+  });
+  const last = await run(wireAdapter(createSearchBackend({ body })), {
+    page: { current: 3, size: 10 },
+  });
+
+  expect(first.page.next).toBe(2);
+  expect(last.page.next).toBeNull();
+});
+
+test("a backend that reports no total reports an unknown one, not a guess", async () => {
+  const backend = createSearchBackend({
+    body: JSON.stringify({ hits: [{ document: { id: "1" } }] }),
+  });
+
+  const response = await run(wireAdapter(backend));
+
+  expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
+  expect(response.page.next).toBe("unknown");
+  expect(response.facets).toEqual({});
+  expect(response.took).toBeNull();
+});
+
+test("a body the wire format does not describe is refused field by field", async () => {
+  const cases = [
+    { body: `"a string"`, detail: "the body is not a JSON object" },
+    {
+      body: `{"total":{"value":1,"accuracy":"exact"}}`,
+      detail: "hits is not an array",
+    },
+    { body: `{"hits":[{"id":"1"}]}`, detail: "a hit has no document" },
+    {
+      body: `{"hits":[],"total":{"value":"many"}}`,
+      detail: "total needs a numeric value",
+    },
+    {
+      body: `{"hits":[],"facets":{"brand":{"exhaustive":true}}}`,
+      detail: "facet brand has no values array",
+    },
+    {
+      body: `{"hits":[],"facets":{"brand":{"values":[{"value":"Apex"}]}}}`,
+      detail: "facet brand has a bucket without a numeric count",
+    },
+  ];
+
+  for (const { body, detail } of cases) {
+    const error = await failureOf(
+      run(wireAdapter(createSearchBackend({ body }))),
+    );
+
+    expect(error).toBeInstanceOf(SearchProviderError);
+    expect(error.message).toContain(detail);
+  }
+});
+
+test("malformed highlight metadata is dropped rather than repaired", async () => {
+  const backend = createSearchBackend({
+    body: JSON.stringify({
+      hits: [
+        {
+          document: { id: "1" },
+          highlights: {
+            title: [{ parts: [{ matched: true }] }],
+            summary: [{ parts: [{ text: "a ", matched: false }] }],
+            tags: "not fragments",
+          },
+        },
+      ],
+    }),
+  });
+
+  const response = await run(wireAdapter(backend));
+
+  // A part with no text cannot be rendered and a fabricated match is worse
+  // than no highlight, so only the well formed field survives.
+  expect(response.hits[0]?.highlights).toEqual({
+    summary: [
+      {
+        path: ["summary"],
+        parts: [{ text: "a ", matched: false }],
+        truncated: "unknown",
+      },
+    ],
+  });
+});
+
+test("a hand written mapping needs neither wire helper", async () => {
+  const backend = createSearchBackend();
+  const adapter = http({
+    endpoint: ENDPOINT,
+    fetch: backend.fetch,
+    capabilities: CAPABILITIES,
+    sorts: { relevance: null },
+    profiles: { default: null },
+    toRequest: (search) => ({ q: search.query, size: search.page.size }),
+    fromResponse: (body, search) => {
+      if (
+        typeof body !== "object" ||
+        body === null ||
+        !("hits" in body) ||
+        !Array.isArray(body.hits)
+      ) {
+        throw new Error("Expected a hits array.");
+      }
+      return {
+        hits: body.hits.map((row: unknown) => {
+          if (typeof row !== "object" || row === null || !("document" in row)) {
+            throw new Error("Expected a document.");
+          }
+          return { document: row.document, highlights: {}, native: row };
+        }),
+        page: {
+          kind: "page",
+          current: search.page.current,
+          size: search.page.size,
+          next: null,
+          previous: null,
+        },
+        total: { accuracy: "unknown", scope: "unknown" },
+        facets: {},
+        took: null,
+        native: body,
+      };
+    },
+  });
+
+  const response = await run(adapter);
+
+  expect(JSON.parse(backend.calls[0]?.init.body ?? "null")).toEqual({
+    q: "shoe",
+    size: 10,
+  });
+  // The fake has no idea what `q` and `size` mean, which is the point: the
+  // body is the application's, and nothing in the package assumes a shape.
+  expect(response.hits).toHaveLength(PRODUCTS.length);
+  expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
 });
