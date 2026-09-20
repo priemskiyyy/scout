@@ -1,0 +1,54 @@
+{
+  "name": "@priemskiyyy/scout-fuse",
+  "version": "0.1.0",
+  "description": "Fuse.js adapter for Scout with exact totals, portable filtering and safe match highlights.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/priemskiyyy/scout.git",
+    "directory": "packages/adapters/fuse"
+  },
+  "bugs": {
+    "url": "https://github.com/priemskiyyy/scout/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../../.. --project fuse"
+  },
+  "keywords": [
+    "search",
+    "fuse.js",
+    "fuzzy-search",
+    "typescript",
+    "scout"
+  ],
+  "homepage": "https://priemskiyyy.github.io/scout/",
+  "peerDependencies": {
+    "@priemskiyyy/scout": ">=0.1.0 <0.2",
+    "fuse.js": ">=7.5 <8"
+  },
+  "devDependencies": {
+    "@priemskiyyy/scout": "workspace:*"
+  }
+}
