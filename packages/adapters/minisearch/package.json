@@ -1,0 +1,59 @@
+{
+  "name": "@priemskiyyy/scout-minisearch",
+  "version": "0.1.0",
+  "description": "MiniSearch adapter for Scout: an in-process index behind the portable search contract, with exact totals, real filtering, and the facets, sorts and highlights MiniSearch cannot honour declared unsupported rather than emulated.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/priemskiyyy/scout.git",
+    "directory": "packages/adapters/minisearch"
+  },
+  "bugs": {
+    "url": "https://github.com/priemskiyyy/scout/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../../.. --project minisearch"
+  },
+  "keywords": [
+    "search",
+    "full-text-search",
+    "minisearch",
+    "client-side-search",
+    "offline-search",
+    "filters",
+    "typescript",
+    "scout",
+    "tanstack-query",
+    "react-native"
+  ],
+  "homepage": "https://priemskiyyy.github.io/scout/",
+  "peerDependencies": {
+    "@priemskiyyy/scout": ">=0.1.0 <0.2",
+    "minisearch": ">=7 <8"
+  },
+  "devDependencies": {
+    "@priemskiyyy/scout": "workspace:*"
+  }
+}
