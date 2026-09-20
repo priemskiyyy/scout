@@ -1,0 +1,65 @@
+name: packages-test
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  push:
+    branches:
+      - "main"
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+
+permissions:
+  contents: read
+
+env:
+  # Canonical identity, page translation and changelog dates must not depend on
+  # where a runner thinks it is.
+  TZ: UTC
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        node:
+          - "22.18.0"
+          - "24"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup
+        with:
+          node-version: ${{ matrix.node }}
+
+      # Every package resolves its siblings through `dist`, so the build comes
+      # before anything that imports one.
+      - name: Build packages
+        run: pnpm build
+
+      - name: Linting Typescript
+        run: pnpm lint:typescript
+
+      - name: Linting Eslint
+        run: pnpm lint:eslint
+
+      - name: Unit tests
+        run: pnpm test:unit
+
+      # Line coverage cannot see a filter that was quietly widened, so the
+      # paths where a wrong answer is silent are mutated instead.
+      - name: Mutation tests
+        run: pnpm test:mutation
+
+      - name: Build example
+        run: pnpm -r --filter './examples/*' build
