@@ -1,5 +1,6 @@
 import {
   SearchConfigurationError,
+  SearchProviderError,
   UnsupportedSearchFeatureError,
 } from "@priemskiyyy/scout";
 import type {
@@ -652,4 +653,72 @@ test("a requested highlight algolia did not return is empty, not missing", async
   });
 
   expect(response.hits[0]?.highlights.summary).toEqual([]);
+});
+
+test("the raw hit and the raw response stay reachable", async () => {
+  const fake = createAlgoliaFake();
+
+  const response = await searchWith(fake, {
+    query: "running",
+    highlights: ["title"],
+  });
+
+  expect(response.hits[0]?.native).toHaveProperty("objectID", "1");
+  expect(response.hits[0]?.native).toHaveProperty("_highlightResult");
+  expect(response.hits[0]?.document).toEqual({
+    objectID: "1",
+    title: "Acme running shoe",
+    brand: "acme",
+    price: 79,
+    tags: ["running", "sale"],
+  });
+  expect(response.native).toHaveProperty("queryID", "fake-query-id");
+  expect(response.took).toBe(3);
+});
+
+test("the client's own caches are bypassed unless the application asks for them", async () => {
+  const bypassed = createAlgoliaFake();
+  const cached = createAlgoliaFake();
+
+  await searchWith(bypassed);
+  await searchWith(cached, {}, { cache: true });
+
+  expect(bypassed.calls[0]?.method).toBe("searchSingleIndexWithHTTPInfo");
+  expect(cached.calls[0]?.method).toBe("searchSingleIndex");
+});
+
+test("a profile and provider options reach algolia together", async () => {
+  const fake = createAlgoliaFake();
+
+  await searchWith(fake, {
+    profile: "strict",
+    provider: { distinct: true },
+  });
+
+  expect(paramsOf(fake)?.typoTolerance).toBe(false);
+  expect(paramsOf(fake)?.distinct).toBe(true);
+});
+
+test("a provider option can never overwrite what scout already decided", async () => {
+  const fake = createAlgoliaFake();
+
+  await searchWith(fake, {
+    query: "running",
+    page: { current: 1, size: 10 },
+    provider: { query: "forged", page: 99 },
+  });
+
+  expect(paramsOf(fake)?.query).toBe("running");
+  expect(paramsOf(fake)?.page).toBe(0);
+});
+
+test("a failing client is reported as a provider error with its cause", async () => {
+  const failure = new Error("index not found");
+  const fake = createAlgoliaFake({ fail: failure });
+
+  const error = await failed(searchWith(fake));
+
+  expect(error).toBeInstanceOf(SearchProviderError);
+  expect(error).toHaveProperty("adapter", "algolia");
+  expect(error).toHaveProperty("cause", failure);
 });
