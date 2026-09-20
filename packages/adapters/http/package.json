@@ -1,0 +1,59 @@
+{
+  "name": "@priemskiyyy/scout-http",
+  "version": "0.1.0",
+  "description": "HTTP adapter for Scout: the plumbing every JSON search endpoint needs, with the request body and the response shape left to the application that owns the backend, plus an opt-in wire format for the ones that own both ends.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/priemskiyyy/scout.git",
+    "directory": "packages/adapters/http"
+  },
+  "bugs": {
+    "url": "https://github.com/priemskiyyy/scout/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "sideEffects": false,
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../../.. --project http"
+  },
+  "keywords": [
+    "search",
+    "full-text-search",
+    "http",
+    "fetch",
+    "rest",
+    "json",
+    "filters",
+    "typescript",
+    "scout",
+    "tanstack-query",
+    "react-native"
+  ],
+  "homepage": "https://priemskiyyy.github.io/scout/",
+  "peerDependencies": {
+    "@priemskiyyy/scout": ">=0.1.0 <0.2"
+  },
+  "devDependencies": {
+    "@priemskiyyy/scout": "workspace:*"
+  }
+}
