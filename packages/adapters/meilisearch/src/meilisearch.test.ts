@@ -493,3 +493,115 @@ test("a requested facet carries its distribution, its stats and no claim of comp
     stats: { min: 45, max: 150 },
   });
 });
+
+test("a named sort becomes the Meilisearch sort array", async () => {
+  const { fake, search } = setup();
+
+  await search({ sort: "cheapest" });
+
+  expect(fake.calls[0]?.params?.sort).toEqual(["price:asc"]);
+});
+
+test("a profile's options reach the engine rather than being advertised only", async () => {
+  const { fake, search } = setup();
+
+  const response = await search({ profile: "titles", query: "Apex" });
+
+  expect(fake.calls[0]?.params?.attributesToSearchOn).toEqual(["title"]);
+  expect(response.hits).toEqual([]);
+});
+
+test("provider options are merged over the profile they extend", async () => {
+  const { fake, search } = setup();
+
+  await search({
+    profile: "titles",
+    provider: { attributesToSearchOn: ["brand"], matchingStrategy: "all" },
+  });
+
+  expect(fake.calls[0]?.params).toMatchObject({
+    attributesToSearchOn: ["brand"],
+    matchingStrategy: "all",
+  });
+});
+
+test("the adapter names every key that would collide with a Scout owned field", () => {
+  const { adapter } = setup();
+
+  expect(adapter.reservedOptions).toEqual([
+    "filter",
+    "q",
+    "page",
+    "hitsPerPage",
+    "offset",
+    "limit",
+    "sort",
+    "facets",
+    "attributesToHighlight",
+    "highlightPreTag",
+    "highlightPostTag",
+  ]);
+});
+
+test("the query travels in the first argument, never as a parameter", async () => {
+  const { fake, search } = setup();
+
+  await search({ query: "shoe" });
+
+  expect(fake.calls[0]?.query).toBe("shoe");
+  expect(fake.calls[0]?.params).not.toHaveProperty("q");
+});
+
+test("the fingerprint is the index uid and carries no credential", () => {
+  const { adapter } = setup({ uid: "products" });
+
+  expect(adapter.fingerprint()).toBe("products");
+  expect(adapter.fingerprint()).not.toMatch(/key|secret|token/i);
+});
+
+test("the engine's own processing time is reported as took", async () => {
+  const { search } = setup({ processingTimeMs: 42 });
+
+  const response = await search();
+
+  expect(response.took).toBe(42);
+});
+
+test("the signal reaches the SDK, which is what transport cancellation means", async () => {
+  const { adapter, fake, search } = setup();
+  const controller = new AbortController();
+
+  await search({}, controller.signal);
+
+  expect(fake.calls[0]?.signal).toBe(controller.signal);
+  expect(adapter.capabilities.cancellation).toBe("transport");
+});
+
+test("the document loses Meilisearch's own keys while the raw hit is kept", async () => {
+  const { search } = setup();
+
+  const response = await search({ query: "sock", highlights: ["title"] });
+  const hit = response.hits[0];
+
+  expect(hit?.document).toEqual({
+    id: "6",
+    title: "Wool sock",
+    brand: "Apex",
+    price: 20,
+    tags: ["wool"],
+  });
+  expect(hit?.native).toHaveProperty("_formatted");
+});
+
+test("a profile or sort the adapter was not configured with is refused", async () => {
+  const { search } = setup();
+
+  // The refusal lists what was configured, because the gap is in this
+  // adapter's own configuration and the names are the fix.
+  await expect(search({ profile: "unknown" })).rejects.toThrow(
+    /no unknown entry in its profiles.*configured with default, titles/,
+  );
+  await expect(search({ sort: "unknown" })).rejects.toThrow(
+    /no unknown entry in its sorts.*configured with relevance, cheapest/,
+  );
+});
