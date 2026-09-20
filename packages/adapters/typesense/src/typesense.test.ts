@@ -322,3 +322,99 @@ test("the signal reaches the client, which is what transport cancellation means"
 
   expect(fake.signals[0]).toBe(controller.signal);
 });
+
+test("a search cutoff turns the total from exact into estimated", async () => {
+  const exact = setup();
+  const cutoff = setup({
+    respond: (response) => ({ ...response, search_cutoff: true }),
+  });
+  const signal = new AbortController().signal;
+
+  expect((await exact.adapter.search(request(), { signal })).total).toEqual({
+    value: 3,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect((await cutoff.adapter.search(request(), { signal })).total).toEqual({
+    value: 3,
+    accuracy: "estimated",
+    scope: "matches",
+  });
+});
+
+test("the engine's own time is the took it reports", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(request(), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.took).toBe(3);
+});
+
+test("a page knows its neighbours and says unknown only when the count stopped early", async () => {
+  const signal = new AbortController().signal;
+  const full = setup({ respond: (response) => ({ ...response, found: 30 }) });
+  const cutoff = setup({
+    respond: (response) => ({ ...response, search_cutoff: true }),
+  });
+  const { adapter } = setup();
+
+  expect(
+    (
+      await full.adapter.search(request({ page: { current: 2, size: 10 } }), {
+        signal,
+      })
+    ).page,
+  ).toEqual({ kind: "page", current: 2, size: 10, next: 3, previous: 1 });
+  expect((await adapter.search(request(), { signal })).page.next).toBeNull();
+  expect((await cutoff.adapter.search(request(), { signal })).page.next).toBe(
+    "unknown",
+  );
+});
+
+test("a sampled facet is reported as not exhaustive", async () => {
+  const signal = new AbortController().signal;
+  const { adapter } = setup();
+  const sampled = setup({
+    respond: (response) => ({
+      ...response,
+      facet_counts: response.facet_counts.map((counts) => ({
+        ...counts,
+        sampled: true,
+      })),
+    }),
+  });
+
+  const counted = await adapter.search(request({ facets: ["brand"] }), {
+    signal,
+  });
+  const guessed = await sampled.adapter.search(request({ facets: ["brand"] }), {
+    signal,
+  });
+
+  expect(counted.facets["brand"]?.exhaustive).toBe(true);
+  expect(guessed.facets["brand"]?.exhaustive).toBe(false);
+});
+
+test("a facet value is coerced to the declared field type", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(
+    request({ facets: ["brand", "price", "inStock"] }),
+    { signal: new AbortController().signal },
+  );
+
+  expect(response.facets["brand"]?.values).toContainEqual({
+    value: "Nimbus",
+    count: 2,
+  });
+  // Typesense reports every facet value as a string, so an undeclared field
+  // stays a string and a declared one is read back as its own type.
+  expect(response.facets["price"]?.values).toContainEqual({
+    value: 120,
+    count: 1,
+  });
+  expect(response.facets["inStock"]?.values).toContainEqual({
+    value: true,
+    count: 2,
+  });
+});
