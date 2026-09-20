@@ -1,4 +1,7 @@
-import { SearchConfigurationError } from "@priemskiyyy/scout";
+import {
+  SearchConfigurationError,
+  SearchProviderError,
+} from "@priemskiyyy/scout";
 import type {
   AdapterSearchRequest,
   FilterExpression,
@@ -622,4 +625,85 @@ test("only the highlights that were asked for are reported", async () => {
   });
 
   expect(Object.keys(response.hits[0]?.highlights ?? {})).toEqual(["name"]);
+});
+
+test("the raw hit and the raw response are preserved", async () => {
+  const { adapter } = setup();
+  const response = await adapter.search(request(), {
+    signal: new AbortController().signal,
+  });
+
+  expect(response.hits[0]?.native).toHaveProperty("text_match");
+  expect(response.native).toHaveProperty("out_of", 5);
+  expect(response.native).toHaveProperty("request_params");
+});
+
+test("the fingerprint is the collection and carries no credential", () => {
+  const { adapter } = setup();
+
+  expect(adapter.fingerprint()).toBe("products");
+  expect(adapter.fingerprint()).not.toMatch(/key|secret|token/i);
+});
+
+test("the reserved options name every field the adapter writes", () => {
+  const { adapter } = setup();
+
+  for (const key of [
+    "filter_by",
+    "q",
+    "page",
+    "per_page",
+    "sort_by",
+    "facet_by",
+    "group_by",
+  ]) {
+    expect(adapter.reservedOptions).toContain(key);
+  }
+});
+
+test("a grouping provider option is refused before the request leaves", async () => {
+  const { fake, adapter } = setup();
+
+  await expect(
+    adapter.search(request({ provider: { group_by: "brand" } }), {
+      signal: new AbortController().signal,
+    }),
+  ).rejects.toThrowError(SearchConfigurationError);
+  expect(fake.calls).toHaveLength(0);
+});
+
+test("a grouped response is refused rather than mapped to an empty page", async () => {
+  const { adapter } = setup({
+    respond: (response) => ({
+      ...response,
+      hits: [],
+      grouped_hits: [{ group_key: ["Nimbus"], hits: response.hits }],
+    }),
+  });
+
+  await expect(
+    adapter.search(request(), { signal: new AbortController().signal }),
+  ).rejects.toThrowError(SearchConfigurationError);
+});
+
+test("provider options are carried, and a Scout owned field still wins", async () => {
+  const sent = await sentFor({
+    provider: { num_typos: 0, exhaustive_search: true, q: "ignored" },
+  });
+
+  expect(sent?.num_typos).toBe(0);
+  expect(sent?.exhaustive_search).toBe(true);
+  expect(sent?.q).toBe("shoe");
+});
+
+test("a provider failure is a Scout provider error keeping the original cause", async () => {
+  const boom = new Error("connection refused");
+  const { adapter } = setup({ fail: boom });
+
+  const failure = await adapter
+    .search(request(), { signal: new AbortController().signal })
+    .catch((error: unknown) => error);
+
+  expect(failure).toBeInstanceOf(SearchProviderError);
+  expect(failure).toHaveProperty("cause", boom);
 });
