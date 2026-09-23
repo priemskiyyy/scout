@@ -5,9 +5,10 @@ import type { AdapterSearchResponse } from "src/types/AdapterSearchResponse";
  *
  * @example
  * ```ts
- * const response: MockSearchResponse = emptySearchResponse(request);
+ * const response: MockSearchResponse = { hits: [], facets: {}, took: null, native: null,
+ *   total: { value: 0, accuracy: "exact", scope: "matches" } };
  * ```
  *
- * @see [Adapter testing](https://priemskiyyy.github.io/scout/writing-an-adapter.html)
+ * @see [Testing an adapter](https://priemskiyyy.github.io/scout/writing-an-adapter.html)
  */
 export type MockSearchResponse = AdapterSearchResponse<unknown, unknown>;

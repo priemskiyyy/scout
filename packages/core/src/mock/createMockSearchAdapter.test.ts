@@ -1,280 +1,163 @@
 import { expect, test } from "vitest";
-import { SearchAbortedError } from "src/errors/SearchAbortedError";
-import { SearchDisposedError } from "src/errors/SearchDisposedError";
-import { SearchProviderError } from "src/errors/SearchProviderError";
+
 import { createMockSearchAdapter } from "src/mock/createMockSearchAdapter";
+import type { MockSearchResponse } from "src/mock/types/MockSearchResponse";
 import { testSearchAdapter } from "src/testing/testSearchAdapter";
+import type { AdapterSearchRequest } from "src/types/AdapterSearchRequest";
+import { product } from "src/utils/internal/testSchema.fixture";
+import { productIndex } from "src/utils/internal/testScout.fixture";
 
-const NAMES = {
-  sorts: { relevance: null },
-  profiles: { default: null },
-} as const;
+const REQUEST: AdapterSearchRequest<Readonly<Record<string, unknown>>> = {
+  index: "products",
+  query: "shoe",
+  searchable: ["name"],
+  profile: "default",
+  sort: null,
+  filter: null,
+  facets: [],
+  highlights: [],
+  page: { current: 1, size: 10 },
+  provider: null,
+};
 
-const searchWith = (
-  adapter: ReturnType<typeof createMockSearchAdapter>["adapter"],
-  signal: AbortSignal,
-) =>
-  adapter.search(
-    {
-      index: "products",
-      query: "shoe",
-      profile: "default",
-      sort: "relevance",
-      filter: { type: "constant", value: true },
-      facets: [],
-      highlights: [],
-      page: { current: 1, size: 10 },
-      provider: null,
-    },
-    { signal },
-  );
-
-test("a held request is recorded and answers only when the test says so", async () => {
-  const { adapter, requests } = createMockSearchAdapter({
-    hold: true,
-    ...NAMES,
-  });
-  const pending = searchWith(adapter, new AbortController().signal);
-
-  expect(requests).toHaveLength(1);
-  requests[0]?.settle({
-    hits: [],
-    page: { kind: "page", current: 1, size: 10, next: null, previous: null },
-    total: { accuracy: "unknown", scope: "unknown" },
-    facets: {},
-    took: null,
-    native: "answered",
-  });
-
-  await expect(pending).resolves.toMatchObject({ native: "answered" });
+const getResponse = (native: unknown): MockSearchResponse => ({
+  hits: [],
+  total: { value: 0, accuracy: "exact", scope: "matches" },
+  facets: {},
+  took: null,
+  native,
 });
 
-test("the default empty answer includes exhaustive requested facets", async () => {
-  const { adapter } = createMockSearchAdapter(NAMES);
-  const result = await adapter.search(
-    {
-      index: "products",
-      query: "shoe",
-      profile: "default",
-      sort: "relevance",
-      filter: { type: "constant", value: true },
-      facets: ["brand"],
-      highlights: [],
-      page: { current: 2, size: 10 },
-      provider: null,
-    },
-    { signal: new AbortController().signal },
-  );
+const getContext = () => ({ signal: new AbortController().signal });
 
-  expect(result.facets["brand"]).toEqual({
-    field: "brand",
-    values: [],
-    exhaustive: true,
-    native: null,
-  });
-  expect(result.page.previous).toBe(1);
+test("a held request is recorded and answers only when the test settles it", async () => {
+  const { adapter, requests } = createMockSearchAdapter({ hold: true });
+  const pending = adapter.search(REQUEST, getContext());
+
+  expect(requests).toHaveLength(1);
+  expect(requests[0]?.request).toBe(REQUEST);
+  requests[0]?.settle(getResponse("answered"));
+
+  await expect(pending).resolves.toEqual(getResponse("answered"));
 });
 
 test("held requests can be answered out of order", async () => {
-  const { adapter, requests } = createMockSearchAdapter({
-    hold: true,
-    ...NAMES,
-  });
-  const first = searchWith(adapter, new AbortController().signal);
-  const second = searchWith(adapter, new AbortController().signal);
+  const { adapter, requests } = createMockSearchAdapter({ hold: true });
+  const first = adapter.search(REQUEST, getContext());
+  const second = adapter.search(REQUEST, getContext());
 
-  requests[1]?.settle({
-    hits: [],
-    page: { kind: "page", current: 1, size: 10, next: null, previous: null },
-    total: { accuracy: "unknown", scope: "unknown" },
-    facets: {},
-    took: null,
-    native: "second",
-  });
-  requests[0]?.settle({
-    hits: [],
-    page: { kind: "page", current: 1, size: 10, next: null, previous: null },
-    total: { accuracy: "unknown", scope: "unknown" },
-    facets: {},
-    took: null,
-    native: "first",
-  });
+  requests[1]?.settle(getResponse("second"));
+  requests[0]?.settle(getResponse("first"));
 
-  await expect(second).resolves.toMatchObject({ native: "second" });
-  await expect(first).resolves.toMatchObject({ native: "first" });
+  await expect(second).resolves.toEqual(getResponse("second"));
+  await expect(first).resolves.toEqual(getResponse("first"));
 });
 
-test("an answer arriving after disposal is refused rather than returned", async () => {
-  const { adapter, requests } = createMockSearchAdapter({
-    hold: true,
-    ...NAMES,
-  });
-  const pending = searchWith(adapter, new AbortController().signal);
+test("a request can be failed with any reason", async () => {
+  const { adapter, requests } = createMockSearchAdapter({ hold: true });
+  const pending = adapter.search(REQUEST, getContext());
+  const reason = new Error("502 Bad Gateway");
 
-  adapter.dispose();
-  requests[0]?.settle({
-    hits: [],
-    page: { kind: "page", current: 1, size: 10, next: null, previous: null },
-    total: { accuracy: "unknown", scope: "unknown" },
-    facets: {},
-    took: null,
-    native: "too late",
-  });
+  requests[0]?.fail(reason);
 
-  await expect(pending).rejects.toThrowError(SearchDisposedError);
+  await expect(pending).rejects.toBe(reason);
 });
 
-test("logical cancellation rejects without waiting for an unresponsive provider", async () => {
+test("an unheld request answers an exact nothing by default", async () => {
+  const { adapter } = createMockSearchAdapter();
+
+  await expect(adapter.search(REQUEST, getContext())).resolves.toEqual(
+    getResponse(null),
+  );
+});
+
+test("an unheld request answers what the response option returns", async () => {
   const { adapter } = createMockSearchAdapter({
-    ...NAMES,
-    hold: true,
-    ignoreSignal: true,
+    response: (request) => getResponse(request.query),
   });
-  const controller = new AbortController();
-  const pending = searchWith(adapter, controller.signal);
-  controller.abort(new Error("The search was replaced."));
 
-  await expect(pending).rejects.toThrowError(SearchAbortedError);
+  await expect(adapter.search(REQUEST, getContext())).resolves.toEqual(
+    getResponse("shoe"),
+  );
 });
 
-test("disposal rejects without waiting for an unresponsive provider", async () => {
+test("a response option that throws rejects, the way a refusal does", async () => {
+  const refusal = new Error("refused");
+
   const { adapter } = createMockSearchAdapter({
-    ...NAMES,
-    hold: true,
-    ignoreSignal: true,
+    response: () => {
+      throw refusal;
+    },
   });
-  const pending = searchWith(adapter, new AbortController().signal);
-  adapter.dispose();
 
-  await expect(pending).rejects.toThrowError(SearchDisposedError);
+  await expect(adapter.search(REQUEST, getContext())).rejects.toBe(refusal);
 });
 
-test("a late answer from an SDK that ignored the abort is refused, not returned", async () => {
-  const { adapter, requests } = createMockSearchAdapter({
-    hold: true,
-    ignoreSignal: true,
-    ...NAMES,
-  });
+test("an abort rejects with the signal's reason", async () => {
+  const { adapter } = createMockSearchAdapter({ hold: true });
   const controller = new AbortController();
-  const pending = searchWith(adapter, controller.signal);
-  controller.abort();
+  const pending = adapter.search(REQUEST, { signal: controller.signal });
+  const reason = new Error("replaced");
 
-  expect(requests[0]?.aborted()).toBe(true);
-  requests[0]?.settle({
-    hits: [],
-    page: { kind: "page", current: 1, size: 10, next: null, previous: null },
-    total: { accuracy: "unknown", scope: "unknown" },
-    facets: {},
-    took: null,
-    native: "ignored the abort",
-  });
-
-  // The engine answered anyway. Scout refuses the answer, which is the whole
-  // meaning of logical cancellation.
-  await expect(pending).rejects.toThrowError(SearchAbortedError);
-});
-
-// A transport cancelling adapter rejects rather than answering, the way fetch
-// does. That rejection is a cancellation, not a provider failure, and consumers
-// have to be able to tell the two apart.
-test("an SDK rejection caused by the abort is reported as a cancellation", async () => {
-  // ignoreSignal keeps the mock from rejecting on the signal itself, so the
-  // rejection under test is the SDK's own, the way a real client reports it.
-  const { adapter, requests } = createMockSearchAdapter({
-    hold: true,
-    ignoreSignal: true,
-    ...NAMES,
-  });
-  const controller = new AbortController();
-  const pending = searchWith(adapter, controller.signal);
-
-  const reason = new Error("The search was replaced.");
   controller.abort(reason);
-  requests[0]?.fail(new Error("The operation was aborted."));
 
-  await expect(pending).rejects.toThrowError(SearchAbortedError);
-  await expect(pending).rejects.toMatchObject({
-    cause: reason,
-  });
+  await expect(pending).rejects.toBe(reason);
 });
 
-test("a rejection with no abort stays a provider failure and is not disguised", async () => {
+test("a mock that ignores the signal keeps waiting, and still records the abort", async () => {
   const { adapter, requests } = createMockSearchAdapter({
     hold: true,
-    ...NAMES,
+    ignoreSignal: true,
   });
-  const pending = searchWith(adapter, new AbortController().signal);
 
-  const raw = new Error("502 Bad Gateway");
-  requests[0]?.fail(raw);
+  const controller = new AbortController();
+  const pending = adapter.search(REQUEST, { signal: controller.signal });
 
-  // A provider failure now arrives with a code, so a consumer can narrow it,
-  // and the SDK's own error is preserved rather than replaced.
-  await expect(pending).rejects.toBeInstanceOf(SearchProviderError);
-  await expect(pending).rejects.not.toBeInstanceOf(SearchAbortedError);
-  await expect(pending).rejects.toMatchObject({
-    code: "provider",
-    adapter: "mock",
-    cause: raw,
-  });
+  controller.abort();
+  expect(requests[0]?.aborted()).toBe(true);
+  requests[0]?.settle(getResponse("late"));
+
+  await expect(pending).resolves.toEqual(getResponse("late"));
 });
 
-test("declared capabilities can be narrowed so a subset engine can be simulated", () => {
+test("the fingerprint, sorts and profiles are the ones configured", () => {
+  const sorts = { priceAsc: "products_price_asc" };
+  const profiles = { names: { weights: [2] } };
+
   const { adapter } = createMockSearchAdapter({
-    capabilities: { highlights: "none", cancellation: "logical" },
-    ...NAMES,
+    fingerprint: "products@2",
+    sorts,
+    profiles,
   });
 
-  expect(adapter.capabilities.highlights).toBe("none");
-  expect(adapter.capabilities.cancellation).toBe("logical");
-  expect(adapter.capabilities.filters.eq).toBe(true);
+  expect(adapter.fingerprint()).toBe("products@2");
+  expect(adapter.sorts).toBe(sorts);
+  expect(adapter.profiles).toBe(profiles);
+  expect(createMockSearchAdapter().adapter.fingerprint()).toBe("mock");
 });
 
-// The mock is itself an adapter, so it has to pass the suite every other
-// adapter passes. This is what keeps the suite honest about its own contract.
+test("disposal is counted, so a test can prove it happened once", () => {
+  const mock = createMockSearchAdapter();
+
+  mock.adapter.dispose?.();
+
+  expect(mock.disposals()).toBe(1);
+});
+
+// The mock is an adapter, so it passes the suite every adapter passes. It
+// evaluates nothing, so the suite checks only the answer's shape.
 testSearchAdapter({
   name: "mock",
-  // The default mock answers with no hits, and a suite block that loops over
-  // hits then runs no assertions at all. It answers with one here so those
-  // blocks are exercised.
+  index: productIndex,
   createAdapter: () =>
     createMockSearchAdapter({
-      ...NAMES,
       response: (request) => ({
-        // A contradiction matches nothing, the way every real adapter answers
-        // one, so the suite's constant block stays meaningful.
-        hits:
-          request.filter.type === "constant" && !request.filter.value
-            ? []
-            : [
-                {
-                  document: { id: "p1", brand: "Sony" },
-                  highlights: {},
-                  native: { score: 1 },
-                },
-              ],
-        page: {
-          kind: "page",
-          current: request.page.current,
-          size: request.page.size,
-          next: null,
-          previous: request.page.current > 1 ? request.page.current - 1 : null,
-        },
-        total: {
-          value: 1,
-          accuracy: "exact" as const,
-          scope: "matches" as const,
-        },
-        facets: {},
-        took: null,
-        native: null,
+        ...getResponse(null),
+        hits: [product({ id: "a" }), product({ id: "b" })]
+          .slice(0, request.page.size)
+          .map((document) => ({ document, highlights: {}, native: {} })),
+        total: { value: 2, accuracy: "exact", scope: "matches" },
       }),
     }).adapter,
-  fixtures: {
-    index: "products",
-    query: "shoe",
-    sort: "relevance",
-    profile: "default",
-    equality: { field: "brand", value: "Sony" },
-  },
+  fixtures: { query: "shoe", equality: { field: "brand", value: "Nike" } },
 });

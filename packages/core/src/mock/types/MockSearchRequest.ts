@@ -10,10 +10,10 @@ import type { MockSearchResponse } from "src/mock/types/MockSearchResponse";
  * recorded?.fail(new Error("Provider unavailable"));
  * ```
  *
- * @see [Adapter testing](https://priemskiyyy.github.io/scout/writing-an-adapter.html)
+ * @see [Testing an adapter](https://priemskiyyy.github.io/scout/writing-an-adapter.html)
  */
 export type MockSearchRequest = {
-  request: AdapterSearchRequest<Readonly<Record<string, unknown>>>;
+  request: AdapterSearchRequest<unknown>;
   /** Whether the signal for this request was aborted, whatever the mock did. */
   aborted: () => boolean;
   settle: (response: MockSearchResponse) => void;

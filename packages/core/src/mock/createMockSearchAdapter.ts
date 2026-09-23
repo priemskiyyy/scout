@@ -1,73 +1,85 @@
-import type { MockSearchResponse } from "src/mock/types/MockSearchResponse";
-import type { MockSearchRequest } from "src/mock/types/MockSearchRequest";
 import type { MockSearchAdapterOptions } from "src/mock/types/MockSearchAdapterOptions";
-import { createSearchAdapter } from "src/generators/createSearchAdapter";
-import { emptySearchResponse } from "src/generators/emptySearchResponse";
-import type { AdapterSearchRequest } from "src/types/AdapterSearchRequest";
-import type { AdapterSearchResponse } from "src/types/AdapterSearchResponse";
-import { FULL_CAPABILITIES } from "src/utils/constants/defaultCapabilities";
-import { deferred } from "src/utils/internal/deferred";
+import type { MockSearchRequest } from "src/mock/types/MockSearchRequest";
+import type { MockSearchResponse } from "src/mock/types/MockSearchResponse";
+import type { SearchAdapter } from "src/types/SearchAdapter";
+import { createDeferred } from "src/utils/internal/createDeferred";
+
+const getEmptyResponse = (): MockSearchResponse => ({
+  hits: [],
+  total: { value: 0, accuracy: "exact", scope: "matches" },
+  facets: {},
+  took: null,
+  native: null,
+});
 
 /**
- * A controllable adapter for lifecycle tests. Records requests and lets tests
- * settle them out of order, ignore cancellation, or return malformed data.
+ * A controllable adapter for tests. It records every request, and lets a test
+ * hold answers, settle them out of order, ignore cancellation or refuse.
  *
  * @example
  * ```ts
- * const { adapter, requests } = createMockSearchAdapter({
- *   hold: true, sorts: { relevance: null }, profiles: { default: null },
- * });
- * const pending = index.search("a").execute();
- * requests[0]?.settle(response);
+ * const mock = createMockSearchAdapter({ hold: true });
+ * const scout = new Scout({ indexes: { products }, adapters: { products: mock.adapter } });
+ * const pending = scout.index("products").search("shoe").execute();
+ * mock.requests[0]?.settle(response);
  * ```
  */
-export const createMockSearchAdapter = <
-  const TSort extends string,
-  const TProfile extends string,
->(
-  options: MockSearchAdapterOptions<TSort, TProfile>,
+export const createMockSearchAdapter = (
+  options: MockSearchAdapterOptions = {},
 ) => {
   const requests: MockSearchRequest[] = [];
-  const build =
-    typeof options.response === "function"
-      ? options.response
-      : emptySearchResponse;
+  let disposals = 0;
 
-  const adapter = createSearchAdapter({
+  const adapter: SearchAdapter<
+    { readonly requests: readonly MockSearchRequest[] },
+    Readonly<Record<string, unknown>>
+  > = {
     name: "mock",
     native: { requests },
-    capabilities: { ...FULL_CAPABILITIES, ...options.capabilities },
+    fingerprint: () => options.fingerprint ?? "mock",
     sorts: options.sorts,
     profiles: options.profiles,
-    reservedOptions: ["filter"],
-    fingerprint: () => "mock",
-    search: (
-      request: AdapterSearchRequest<Readonly<Record<string, unknown>>>,
-      { signal },
-    ): Promise<AdapterSearchResponse<unknown, unknown>> => {
-      const answer = deferred<MockSearchResponse>();
-      const record: MockSearchRequest = {
+    reservedOptions: options.reservedOptions,
+    search: (request, { signal }) => {
+      const answer = createDeferred<MockSearchResponse>();
+
+      requests.push({
         request,
         aborted: () => signal.aborted,
         settle: answer.resolve,
         fail: answer.reject,
-      };
-      requests.push(record);
+      });
 
+      // A well behaved SDK rejects as soon as the signal fires. The mock does
+      // so unless a test asked it to misbehave.
       if (options.ignoreSignal !== true) {
-        // A well behaved SDK rejects as soon as the signal fires. The mock only
-        // does so when a test did not ask it to misbehave.
         signal.addEventListener("abort", () => answer.reject(signal.reason), {
           once: true,
         });
       }
+
       if (options.hold === true) {
         return answer.promise;
       }
-      answer.resolve(build(request));
+
+      if (typeof options.response !== "function") {
+        answer.resolve(getEmptyResponse());
+
+        return answer.promise;
+      }
+
+      try {
+        answer.resolve(options.response(request));
+      } catch (error) {
+        answer.reject(error);
+      }
+
       return answer.promise;
     },
-  });
+    dispose: () => {
+      disposals += 1;
+    },
+  };
 
-  return { adapter, requests };
+  return { adapter, requests, disposals: () => disposals };
 };
