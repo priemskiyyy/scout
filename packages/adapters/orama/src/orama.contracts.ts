@@ -8,6 +8,7 @@ import type {
   WhereCondition,
 } from "@orama/orama";
 import { expectTypeOf } from "vitest";
+
 import { orama } from "src/orama";
 import type { OramaDatabase } from "src/types/OramaDatabase";
 import type { OramaFacetDefinition } from "src/types/OramaFacetDefinition";
@@ -15,7 +16,6 @@ import type { OramaHit } from "src/types/OramaHit";
 import type { OramaResponse } from "src/types/OramaResponse";
 import type { OramaSearchParams } from "src/types/OramaSearchParams";
 import type { OramaSearchProfile } from "src/types/OramaSearchProfile";
-import type { OramaSearchSort } from "src/types/OramaSearchSort";
 
 export const contractDatabase = create({
   schema: {
@@ -40,25 +40,10 @@ export const contractAdapter = orama({
   db: contractDatabase,
   search,
   revision: () => 1,
-  profiles: { default: {}, names: { properties: ["name"] } },
-  sorts: { relevance: {}, priceAsc: { sortBy: { property: "price" } } },
+  profiles: { forgiving: { tolerance: 2 } },
 });
 
 expectTypeOf(contractAdapter.native).toEqualTypeOf<typeof contractDatabase>();
-
-// The declared names survive, so an index can require the adapter to cover
-// every sort and profile it declares.
-expectTypeOf(contractAdapter.sorts).toExtend<{
-  relevance: OramaSearchSort;
-  priceAsc: OramaSearchSort;
-}>();
-expectTypeOf(contractAdapter.profiles).toExtend<{
-  default: OramaSearchProfile;
-  names: OramaSearchProfile;
-}>();
-
-// Orama answers synchronously or with a promise; Scout promises a promise.
-expectTypeOf(contractAdapter.search).returns.toExtend<Promise<unknown>>();
 
 export type ContractHit = Awaited<
   ReturnType<(typeof contractAdapter)["search"]>
@@ -87,8 +72,12 @@ expectTypeOf<{ price: { gte: number } }>().toExtend<
 expectTypeOf<{ price: { between: [number, number] } }>().toExtend<
   WhereCondition<ContractSchema>
 >();
-expectTypeOf<{ and: [] }>().toExtend<WhereCondition<ContractSchema>>();
-expectTypeOf<{ not: { and: [] } }>().toExtend<WhereCondition<ContractSchema>>();
+expectTypeOf<{ not: { brand: { eq: string } } }>().toExtend<
+  WhereCondition<ContractSchema>
+>();
+expectTypeOf<{
+  and: [{ price: { gte: number } }, { inStock: boolean }];
+}>().toExtend<WhereCondition<ContractSchema>>();
 expectTypeOf<{
   or: [{ brand: { eq: string } }, { brand: { eq: string } }];
 }>().toExtend<WhereCondition<ContractSchema>>();
@@ -97,8 +86,14 @@ expectTypeOf<{
 expectTypeOf<Record<"brand", OramaFacetDefinition>>().toExtend<
   FacetsParams<typeof contractDatabase>
 >();
-expectTypeOf<Required<OramaSearchSort>["sortBy"]>().toExtend<
+expectTypeOf<{ property: string; order: "ASC" | "DESC" }>().toExtend<
   SorterParams<typeof contractDatabase>
+>();
+
+// A profile tunes the search and never names the properties, which come from
+// the index.
+expectTypeOf<OramaSearchProfile>().toExtend<
+  Pick<OramaSearchParams, "boost" | "tolerance" | "threshold">
 >();
 
 // @ts-expect-error a database the adapter cannot read a schema from
@@ -123,12 +118,9 @@ export const hybridProfile: OramaSearchProfile = {
   hybridWeights: { text: 0.5, vector: 0.5 },
 };
 
-export const unknownOrder: OramaSearchSort = {
-  sortBy: {
-    property: "price",
-    // @ts-expect-error Orama orders ascending or descending and nothing else
-    order: "ascending",
-  },
+export const propertiesProfile: OramaSearchProfile = {
+  // @ts-expect-error the properties a profile searches come from the index
+  properties: ["name"],
 };
 
 orama({
@@ -136,6 +128,4 @@ orama({
   search,
   // @ts-expect-error a corpus revision has to be a value an identity can carry
   revision: () => ({ version: 1 }),
-  profiles: { default: {} },
-  sorts: { relevance: {} },
 });

@@ -1,8 +1,8 @@
 # @priemskiyyy/scout-orama
 
-Orama adapter for [Scout](https://priemskiyyy.github.io/scout/). Orama runs in
-the process that searches it, so this adapter answers a Scout search without a
-network round trip, in a browser, in a React Native app or on a server.
+The Orama adapter for [Scout](https://priemskiyyy.github.io/scout/). Orama runs
+in the process that searches it, so a Scout search costs no network round trip,
+in a browser, in a React Native app or on a server.
 
 It translates the portable keyword subset and nothing else. Vector, hybrid and
 embedding search are not reached from here.
@@ -11,10 +11,10 @@ embedding search are not reached from here.
 pnpm add @priemskiyyy/scout-orama @priemskiyyy/scout @orama/orama
 ```
 
-## Wiring it up
-
 The database and Orama's `search` are injected, so this package imports no
 Orama code at runtime and cannot disagree with the version you installed.
+
+## Use
 
 ```ts
 import { create, insert, search } from "@orama/orama";
@@ -36,136 +36,122 @@ let revision = 0;
 const products = index({
   schema: ProductSchema,
   id: (product) => product.id,
+  searchable: ["name", "description"],
   filterable: ["brand", "price", "inStock"],
-  facetable: ["brand", "inStock"],
-  highlightable: [],
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default", "names"],
-  adapter: orama({
-    db,
-    search,
-    revision: () => revision,
-    profiles: {
-      default: {},
-      names: { properties: ["name"] },
-    },
-    sorts: {
-      relevance: {},
-      priceAsc: { sortBy: { property: "price", order: "ASC" } },
-    },
-  }),
+  facetable: { brand: "string", inStock: "boolean" },
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { forgiving: { searchable: ["name"] } },
 });
 
-const scout = new Scout({ indexes: { products } });
+const scout = new Scout({
+  indexes: { products },
+  adapters: {
+    products: orama({
+      db,
+      search,
+      revision: () => revision,
+      profiles: { forgiving: { tolerance: 2 } },
+    }),
+  },
+});
 ```
 
-A profile carries the knobs that change which documents match or in what order:
-`properties`, `boost`, `tolerance` and `threshold`. A sort carries Orama's own
-`sortBy`, and a sort without one keeps Orama's relevance order.
+## Options
+
+- `db` is your database. The adapter reads its schema and never changes it.
+- `search` is Orama's own `search` function, passed beside the database because
+  Orama exports it as a function rather than as a method.
+- `revision` is your corpus version, described below.
+- `profiles` tunes the index's profiles, keyed by profile name, with Orama's
+  `boost`, `tolerance` and `threshold`. The properties a profile searches come
+  from the index.
+
+The adapter takes no provider options. Everything Orama tunes per search
+belongs to a profile, and a provider option passed from JavaScript is refused
+with `configuration`.
 
 ## The corpus revision
 
-A remote engine changes behind an HTTP request, so a cache eventually notices.
-A local corpus changes in the same process, with nothing in between to notice
-it. **Scout does not watch your database.** Nothing in Scout reads it, hooks it
-or compares it.
+A remote engine changes behind a request, so a cache eventually notices. A
+local corpus changes in the same process, with nothing in between to notice it.
+**Scout does not watch your database.**
 
-So the application owns a revision, and the adapter folds it into the query
-identity through its fingerprint:
+So the application owns a revision, and the adapter puts it in every query key
+for the index through its fingerprint. Bump it whenever the corpus changes:
+after an insert, an update, a removal, a `load()` or a rebuild.
 
 ```ts
-let revision = 0;
-
-const bump = () => {
-  revision += 1;
-};
-
 insert(db, product);
-bump();
+revision += 1;
 ```
-
-Bump it whenever the corpus changes: after an insert, an update, a removal, a
-`load()` of a serialised index or a rebuild. Any value that changes will do, and
-a counter is the easiest one. Scout puts it in every query key for this index,
-so a cached query for the old corpus and the same query for the new one are two
-different queries.
 
 Forget to bump it and TanStack Query keeps answering from the old corpus until
 something else invalidates it. Bump it more often than needed and you lose
-cache hits, which is the cheap mistake of the two.
+cache hits, the cheaper mistake. The revision reaches cache keys and devtools,
+so it is never a credential.
 
-The revision must not be a credential. It takes part in query identity, so it
-reaches cache keys and devtools.
+## What it translates
 
-## Aborting does not stop the work
+- **Query.** The query is Orama's `term`, over the profile's fields as
+  `properties`. An empty query browses: neither is sent, because Orama matches
+  an empty term against the properties it is given, which would leave out a
+  document with no token in them.
+- **Filters.** Orama filters a property by the kind its schema declares. An
+  `enum`, `number` or `boolean` property is matched by value, and a `string`
+  property by **token**, so a filter on `Acme Audio` would also match `Acme`.
+  A filter is translated for the kinds Orama matches by value. `and`, `or` and
+  `not` keep their shape, because Orama's `where` is a tree. `neq` and `notIn`
+  are the complement of the matching set, so a document without the property
+  is in it.
+- **Sorts.** A sort becomes Orama's `sortBy` on its one property.
+- **Pages.** Scout's one-based page becomes Orama's `limit` and `offset`.
+- **Totals.** Orama counts every match, so a total is exact.
+- **Facets.** Orama counts every match, and keys each bucket by the value's
+  string, which Scout reads back as the type the index declared.
+  `exhaustive` is `false` when Orama truncated the list, which it does past
+  ten values of a `string` property.
+- **Time.** `took` is Orama's own `elapsed`, converted from nanoseconds.
+
+`hit.native` is Orama's own result, `score` among it, and `result.native` is
+the whole response.
+
+## What it refuses
+
+Each refusal is a `ScoutError`, thrown before Orama is searched.
+
+| Asked for                                                                                        | Code                  |
+| ------------------------------------------------------------------------------------------------ | --------------------- |
+| A filter on a `string`, `string[]`, `enum[]`, `number[]`, `boolean[]` or `geopoint` property     | `unsupported-feature` |
+| `gt`, `gte`, `lt`, `lte` or `between` on an `enum` or `boolean` property                         | `unsupported-feature` |
+| A sort by more than one property, or on a property that is not a `number`, `string` or `boolean` | `unsupported-feature` |
+| A facet on a `number` property, which Orama counts only into ranges                              | `unsupported-feature` |
+| A highlight, because Orama's keyword search reports no match offsets                             | `unsupported-feature` |
+| A filter or facet on a property the Orama schema does not declare                                | `configuration`       |
+| A filter value the property cannot hold, such as `"199"` for a `number`                          | `configuration`       |
+| A provider option                                                                                | `configuration`       |
+
+Nothing is filtered or sorted in JavaScript over a returned page.
+
+## Orama's own quirks
+
+- A facet counts a document without the property under `""` for a `string` or
+  `enum` property and under `false` for a `boolean` one.
+- In Orama 3.1, a negated filter on a search with no query also returns a
+  document removed with `remove()`, as a hit with an empty document, and counts
+  it. Scout's schema check refuses such a hit, or drops it under
+  `validate: "skip"`, but the total still counts it. Rebuild the database after
+  removals if you browse with `neq`, `notIn` or `not`.
+
+## Cancellation
 
 Orama runs to completion in the process that called it, and it takes no
-`AbortSignal`. The adapter declares `cancellation: "logical"`: aborting a search
-makes Scout refuse the answer, and the search itself still runs to the end.
-There is no cancellation path to add here, only the honest label.
+`AbortSignal`. Aborting makes Scout settle the search at once and refuse the
+answer, and the search itself still runs to the end.
 
-## What is translated, and what is refused
+## Tests
 
-Orama filters a property by the kind its schema declares. An `enum`, `number` or
-`boolean` property is matched by value. A `string` property is matched by
-**token**: `where: { brand: "Acme Audio" }` matches every document whose brand
-contains `acme` or `audio`, which is not what `eq` means anywhere else in Scout.
-
-So a portable filter is translated for the kinds Orama matches by value, and
-refused with `UnsupportedSearchFeatureError` for the rest. Declare a field you
-mean to filter exactly as `enum`, not as `string`.
-
-| Filter                   | `number` | `enum`  | `boolean` | `string`, `string[]`, `enum[]`, `number[]`, `geopoint` |
-| ------------------------ | -------- | ------- | --------- | ------------------------------------------------------ |
-| `eq`                     | yes      | yes     | yes       | refused                                                |
-| `neq`                    | yes      | yes     | yes       | refused                                                |
-| `in`, `notIn`            | yes      | yes     | yes       | refused                                                |
-| `gt`, `gte`, `lt`, `lte` | yes      | refused | refused   | refused                                                |
-| `between`                | yes      | refused | refused   | refused                                                |
-
-`and`, `or` and `not` are supported at any depth, because Orama's `where` takes
-them as a tree. `neq` and `notIn` are the complement of the matching set, so a
-document that does not hold the property at all is part of the answer.
-
-Nothing is ever filtered or sorted in JavaScript over a returned page. A filter
-this adapter cannot express throws before the search runs.
-
-## Totals, pages, facets and highlights
-
-- **Totals** are exact. Orama counts every match, so a total is
-  `accuracy: "exact"` with `scope: "matches"`, and whether another page exists
-  is known rather than guessed.
-- **Pages** are Scout's one-based pages translated into Orama's `limit` and
-  `offset`. There is no maximum page size.
-- **Facets** are reported for `enum`, `boolean` and `string` properties.
-  `exhaustive` is `true` when Orama returned every distinct value it counted and
-  `false` when it truncated the list to its own limit, which it does for
-  `string` properties past ten values. A facet on a `number` property is
-  refused: Orama counts one into ranges, and the portable facet request carries
-  no ranges to give it.
-- **Highlights** are declared `"none"`. Orama's keyword search reports no match
-  offsets, so there is nothing to build `HighlightPart` values from, and
-  inventing them from a tokenizer this package cannot see would be fabricating
-  them. Every hit carries an empty highlight record, and asking an index for a
-  highlight through this adapter throws.
-
-## Native access
-
-`hit.native` is Orama's own `Result`, including its `score`. The whole Orama
-response is on `result.native`, including `count`, `elapsed` and `facets`.
-
-This adapter takes no provider options: its native option type is `never`, so
-`.provider()` cannot be called on an Orama backed index at all. Everything Orama
-exposes per search, such as `boost`, `tolerance` and `threshold`, belongs to a
-named profile instead. Reach the database directly through `index.native` for
-anything Scout does not model, remembering that a direct call bypasses Scout's
-identity, capability checks and result mapping, and therefore any cache built on
-them.
-`took` is Orama's own `elapsed.raw`, converted from nanoseconds to
-milliseconds.
-
-## Verification
-
-The tests run against a real `@orama/orama` database holding real documents,
-because the engine is in process and there is nothing to stand in for. There is
-no fake.
+The tests run against a real `@orama/orama` 3.1 database holding real
+documents, because the engine is in process and there is nothing to stand in
+for. The conformance suite runs over the same corpus and asserts which
+documents came back. There is no fake. Each helper in `src/utils/` has its own
+tests beside it.

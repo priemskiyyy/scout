@@ -1,7 +1,7 @@
 {
   "name": "@priemskiyyy/scout-orama",
   "version": "0.1.0",
-  "description": "Orama adapter for Scout: the portable keyword subset of a local in-process corpus, with the corpus revision folded into the query identity.",
+  "description": "Orama adapter for Scout: the portable keyword subset of a local in-process corpus, exact totals and facets, and the corpus revision folded into the query identity.",
   "type": "module",
   "license": "MIT",
   "repository": {

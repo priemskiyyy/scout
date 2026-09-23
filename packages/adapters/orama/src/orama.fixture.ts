@@ -1,6 +1,10 @@
-import { create, insert } from "@orama/orama";
+import { create, insert, search } from "@orama/orama";
+import { index } from "@priemskiyyy/scout";
+import type { StandardSchema } from "@priemskiyyy/scout";
+
+import type { OramaResponse } from "src/types/OramaResponse";
+import type { OramaSearchParams } from "src/types/OramaSearchParams";
 import type { OramaSearchProfile } from "src/types/OramaSearchProfile";
-import type { OramaSearchSort } from "src/types/OramaSearchSort";
 
 /** One document in the fixture corpus. */
 export type Product = {
@@ -76,19 +80,48 @@ export const PRODUCTS: readonly Product[] = [
   },
 ];
 
-/** The sorts the fixture adapter covers. */
-export const PRODUCT_SORTS = {
-  relevance: {},
-  priceAsc: { sortBy: { property: "price", order: "ASC" } },
-  priceDesc: { sortBy: { property: "price", order: "DESC" } },
-} satisfies Readonly<Record<string, OramaSearchSort>>;
+const isProduct = (value: unknown): value is Product =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "id")?.value === "string";
 
-/** The profiles the fixture adapter covers. */
-export const PRODUCT_PROFILES = {
-  default: {},
-  names: { properties: ["name"] },
+/** Reads a stored document back as the product it is. */
+export const productSchema: StandardSchema<Product> = {
+  "~standard": {
+    version: 1,
+    vendor: "orama-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/**
+ * The fixture corpus as an index declares it. `name` is highlightable only so
+ * the conformance suite meets the adapter's refusal.
+ */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["name", "description"],
+  filterable: ["brand", "category", "price", "inStock"],
+  facetable: { brand: "string", category: "string", inStock: "boolean" },
+  highlightable: ["name"],
+  sorts: { priceAsc: { price: "asc" }, priceDesc: { price: "desc" } },
+  profiles: {
+    names: { searchable: ["name"] },
+    forgiving: { searchable: ["name", "description"] },
+  },
+});
+
+/** The tuning the fixture adapter gives the index's profiles. */
+export const PRODUCT_PROFILES: Readonly<Record<string, OramaSearchProfile>> = {
   forgiving: { tolerance: 2 },
-} satisfies Readonly<Record<string, OramaSearchProfile>>;
+};
 
 /**
  * A fresh database holding the fixture corpus. Nothing is shared between two
@@ -108,8 +141,27 @@ export const createProductDatabase = () => {
       inStock: "boolean",
     },
   });
+
   for (const product of PRODUCTS) {
     insert(db, product);
   }
+
   return db;
 };
+
+type ProductDatabase = ReturnType<typeof createProductDatabase>;
+
+// A method, so Orama's own generic `search` is accepted, the way the adapter
+// options accept it.
+const engine: {
+  search(
+    db: ProductDatabase,
+    params: OramaSearchParams,
+  ): OramaResponse<Product> | Promise<OramaResponse<Product>>;
+} = { search };
+
+/** Orama's own search over a fixture database, typed the way the adapter calls it. */
+export const searchProducts = (
+  db: ProductDatabase,
+  params: OramaSearchParams,
+) => engine.search(db, params);
