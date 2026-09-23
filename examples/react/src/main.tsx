@@ -1,20 +1,26 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Application } from "src/Application";
 
-const container = document.getElementById("root");
-if (container === null) {
-  throw new Error("The #root element is missing from index.html.");
+import { QUERY_DEFAULTS } from "examples/shared/outpost/constants/queryDefaults";
+import { startOutpost } from "examples/shared/outpost/utils/startOutpost";
+import { Application } from "src/Application";
+import "src/styles.css";
+
+const root = document.getElementById("root");
+
+if (root === null) {
+  throw new Error("The page has no #root element.");
 }
 
-// Scout sets no caching defaults, so the application chooses them here, once.
-const client = new QueryClient();
+const queryClient = new QueryClient({ defaultOptions: QUERY_DEFAULTS });
 
-createRoot(container).render(
+const { outpost, runtime } = startOutpost({ latency: 400 });
+
+createRoot(root).render(
   <StrictMode>
-    <QueryClientProvider client={client}>
-      <Application />
+    <QueryClientProvider client={queryClient}>
+      <Application outpost={outpost} runtime={runtime} />
     </QueryClientProvider>
   </StrictMode>,
 );
