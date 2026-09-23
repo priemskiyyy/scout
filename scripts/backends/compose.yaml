@@ -1,0 +1,40 @@
+# The real engines behind `pnpm test:backends`. The runner starts one at a
+# time, the adapter's backend test seeds it, and the runner removes it with its
+# data, so nothing carries over between runs. Every credential here exists only
+# inside these throwaway containers.
+services:
+  typesense:
+    image: typesense/typesense:30.2
+    command: ["--data-dir", "/data", "--api-key", "scout-backend-test"]
+    tmpfs: ["/data"]
+    ports: ["8108:8108"]
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.54.0
+    environment:
+      MEILI_MASTER_KEY: scout-backend-test-master-key
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_ENV: development
+    tmpfs: ["/meili_data"]
+    ports: ["7700:7700"]
+
+  elasticsearch:
+    image: elasticsearch:9.5.3
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["9200:9200"]
+
+  opensearch:
+    image: opensearchproject/opensearch:3.8.0
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      DISABLE_INSTALL_DEMO_CONFIG: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["9201:9200"]
+
+  mongodb:
+    image: mongodb/mongodb-atlas-local:8.3.11
+    ports: ["27017:27017"]
