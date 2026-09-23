@@ -1,0 +1,23 @@
+{
+  "name": "example-solid",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit -p . && vite build",
+    "preview": "vite preview",
+    "lint:typescript": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@priemskiyyy/scout": "workspace:*",
+    "@priemskiyyy/scout-tanstack-query": "workspace:*",
+    "@tanstack/solid-query": "5.103.2",
+    "clsx": "2.1.1",
+    "example-shared": "workspace:*",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "4.3.3",
+    "tailwindcss": "4.3.3"
+  }
+}
