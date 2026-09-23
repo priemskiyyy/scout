@@ -1,6 +1,7 @@
 import type { Algoliasearch } from "algoliasearch";
 import { expectTypeOf } from "vitest";
 import type { AlgoliaExhaustive } from "src/types/AlgoliaExhaustive";
+import type { AlgoliaHighlightResult } from "src/types/AlgoliaHighlightResult";
 import type { AlgoliaHit } from "src/types/AlgoliaHit";
 import type { AlgoliaRequestOptions } from "src/types/AlgoliaRequestOptions";
 import type { AlgoliaSearchClient } from "src/types/AlgoliaSearchClient";
@@ -21,6 +22,7 @@ type RealHttpResponse = Awaited<
   ReturnType<Algoliasearch["searchSingleIndexWithHTTPInfo"]>
 >;
 type RealHit = RealResponse["hits"][number];
+type RealHighlightResult = NonNullable<RealHit["_highlightResult"]>[string];
 
 // The injected client and the fake answer to the same structural type.
 expectTypeOf<Algoliasearch>().toExtend<AlgoliaSearchClient>();
@@ -34,6 +36,11 @@ expectTypeOf<RealRequestOptions>().toExtend<AlgoliaRequestOptions>();
 expectTypeOf<RealResponse>().toExtend<AlgoliaSearchResponse>();
 expectTypeOf<RealHttpResponse>().toExtend<{ data: AlgoliaSearchResponse }>();
 expectTypeOf<RealHit>().toExtend<AlgoliaHit>();
+
+// Every shape Algolia gives a highlighted attribute, a value, an array or a
+// nested object, is one the adapter's union names, so it reads them without
+// checking what they are.
+expectTypeOf<RealHighlightResult>().toExtend<AlgoliaHighlightResult>();
 expectTypeOf<
   NonNullable<RealResponse["exhaustive"]>
 >().toExtend<AlgoliaExhaustive>();
@@ -49,8 +56,10 @@ expectTypeOf<NonNullable<RealResponse["exhaustive"]>["nbHits"]>().toEqualTypeOf<
 
 const takesRequestOptions = (options: RealRequestOptions) => options;
 const takesSearchParams = (params: RealParams) => params;
+
 const takesExhaustive = (exhaustive: NonNullable<RealResponse["exhaustive"]>) =>
   exhaustive;
+
 const takesNumber = (value: number) => value;
 const takesString = (value: string) => value;
 const takesClient = (client: AlgoliaSearchClient) => client;
@@ -59,7 +68,7 @@ declare const response: RealResponse;
 declare const hit: RealHit;
 declare const withoutHttpInfo: Pick<AlgoliaSearchClient, "searchSingleIndex">;
 
-// @ts-expect-error There is no AbortSignal anywhere in @algolia/client-common 5.59.0, so a request cannot carry a signal and the adapter declares cancellation "logical".
+// @ts-expect-error There is no AbortSignal anywhere in @algolia/client-common 5.59.0, so a request cannot carry a signal and an aborted search still runs on Algolia.
 takesRequestOptions({ signal: new AbortController().signal });
 
 // @ts-expect-error Algolia sorts with replica indexes, so there is no per request sort parameter and a named Scout sort has to resolve to an index name.

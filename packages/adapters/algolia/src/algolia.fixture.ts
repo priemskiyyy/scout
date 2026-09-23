@@ -1,4 +1,8 @@
+import { index } from "@priemskiyyy/scout";
+import type { StandardSchema } from "@priemskiyyy/scout";
+
 import type { AlgoliaExhaustive } from "src/types/AlgoliaExhaustive";
+import type { AlgoliaHighlightResult } from "src/types/AlgoliaHighlightResult";
 import type { AlgoliaHit } from "src/types/AlgoliaHit";
 import type { AlgoliaSearchClient } from "src/types/AlgoliaSearchClient";
 import type { AlgoliaSearchParams } from "src/types/AlgoliaSearchParams";
@@ -11,13 +15,17 @@ export type AlgoliaFakeCall = {
   searchParams: AlgoliaSearchParams;
 };
 
-export type AlgoliaFakeDocument = Readonly<Record<string, unknown>> & {
+/** The one product shape the fake corpus holds. */
+export type AlgoliaFakeProduct = {
   objectID: string;
   title: string;
   brand: string;
   price: number;
   tags: readonly string[];
 };
+
+export type AlgoliaFakeDocument = Readonly<Record<string, unknown>> &
+  AlgoliaFakeProduct;
 
 export type AlgoliaFakeOptions = {
   documents?: readonly AlgoliaFakeDocument[];
@@ -82,20 +90,44 @@ export const ALGOLIA_FAKE_PRODUCTS: readonly AlgoliaFakeDocument[] = [
   },
 ];
 
+/** The index's `searchableAttributes`, which a search may only narrow. */
 const SEARCHABLE: readonly string[] = ["title", "brand"];
 
-const matches = (document: AlgoliaFakeDocument, query: string): boolean => {
+/** Algolia answers a larger `hitsPerPage` with a 400. */
+const MAX_HITS_PER_PAGE = 1000;
+
+const matches = (
+  document: AlgoliaFakeDocument,
+  query: string,
+  searchable: readonly string[],
+): boolean => {
   if (query.length === 0) {
     return true;
   }
+
   const needle = query.toLowerCase();
-  return SEARCHABLE.some((field) => {
+
+  return searchable.some((field) => {
     const value = document[field];
+
     if (typeof value !== "string") {
       return false;
     }
+
     return value.toLowerCase().includes(needle);
   });
+};
+
+// Algolia narrows a search to the attributes asked for, and only among the
+// ones the index searches at all.
+const getSearchable = (params: AlgoliaSearchParams): readonly string[] => {
+  if (!Array.isArray(params.restrictSearchableAttributes)) {
+    return SEARCHABLE;
+  }
+
+  return params.restrictSearchableAttributes.filter((field) =>
+    SEARCHABLE.includes(field),
+  );
 };
 
 /**
@@ -113,16 +145,20 @@ const mark = (
     typeof params.highlightPreTag === "string"
       ? params.highlightPreTag
       : "<em>";
+
   let post = "";
+
   if (!broken) {
     post =
       typeof params.highlightPostTag === "string"
         ? params.highlightPostTag
         : "</em>";
   }
+
   if (query.length === 0) {
     return value;
   }
+
   const needle = query.toLowerCase();
   const haystack = value.toLowerCase();
   let marked = "";
@@ -130,13 +166,16 @@ const mark = (
 
   while (cursor < value.length) {
     const found = haystack.indexOf(needle, cursor);
+
     if (found === -1) {
       break;
     }
+
     marked += value.slice(cursor, found);
     marked += `${pre}${value.slice(found, found + query.length)}${post}`;
     cursor = found + query.length;
   }
+
   return marked + value.slice(cursor);
 };
 
@@ -145,15 +184,23 @@ const highlightValue = (
   query: string,
   params: AlgoliaSearchParams,
   broken: boolean,
-): unknown => {
+): AlgoliaHighlightResult | undefined => {
   if (Array.isArray(value)) {
-    return value.map((element) =>
-      highlightValue(element, query, params, broken),
-    );
+    return value.flatMap((element) => {
+      const result = highlightValue(element, query, params, broken);
+
+      if (result === undefined) {
+        return [];
+      }
+
+      return [result];
+    });
   }
+
   if (typeof value !== "string") {
     return undefined;
   }
+
   return {
     value: mark(value, query, params, broken),
     matchLevel: value.toLowerCase().includes(query.toLowerCase())
@@ -168,19 +215,24 @@ const buildHighlightResult = (
   query: string,
   params: AlgoliaSearchParams,
   broken: boolean,
-): Readonly<Record<string, unknown>> | undefined => {
+): Readonly<Record<string, AlgoliaHighlightResult>> | undefined => {
   const fields = params.attributesToHighlight;
+
   if (!Array.isArray(fields) || fields.length === 0) {
     return undefined;
   }
-  return Object.fromEntries(
-    fields
-      .map((field) => [
-        field,
-        highlightValue(document[field], query, params, broken),
-      ])
-      .filter(([, value]) => typeof value !== "undefined"),
-  );
+
+  const highlight: Record<string, AlgoliaHighlightResult> = {};
+
+  for (const field of fields) {
+    const result = highlightValue(document[field], query, params, broken);
+
+    if (result !== undefined) {
+      highlight[field] = result;
+    }
+  }
+
+  return highlight;
 };
 
 const countFacets = (
@@ -190,9 +242,11 @@ const countFacets = (
   Object.fromEntries(
     fields.map((field) => {
       const counts: Record<string, number> = {};
+
       for (const document of documents) {
         const value = document[field];
         const values = Array.isArray(value) ? value : [value];
+
         for (const each of values) {
           if (
             typeof each !== "string" &&
@@ -201,10 +255,13 @@ const countFacets = (
           ) {
             continue;
           }
+
           const key = String(each);
+
           counts[key] = (counts[key] ?? 0) + 1;
         }
       }
+
       return [field, counts];
     }),
   );
@@ -221,7 +278,7 @@ const countFacets = (
  * @example
  * ```ts
  * const fake = createAlgoliaFake();
- * const adapter = algolia({ client: fake.client, index: { name: "products" }, ... });
+ * const adapter = algolia({ client: fake.client, indexName: "products" });
  * await adapter.search(request, { signal });
  * expect(fake.calls[0]?.searchParams.page).toBe(0);
  * ```
@@ -236,6 +293,7 @@ export const createAlgoliaFake = (options: AlgoliaFakeOptions = {}) => {
     searchParams: AlgoliaSearchParams | undefined,
   ): Promise<AlgoliaSearchResponse> => {
     const params = searchParams ?? {};
+
     calls.push({ method, indexName, searchParams: params });
 
     if (typeof options.fail !== "undefined") {
@@ -243,11 +301,26 @@ export const createAlgoliaFake = (options: AlgoliaFakeOptions = {}) => {
     }
 
     const query = typeof params.query === "string" ? params.query : "";
+
     const size =
       typeof params.hitsPerPage === "number" ? params.hitsPerPage : 20;
+
+    if (size > MAX_HITS_PER_PAGE) {
+      return Promise.reject(
+        new Error(
+          `hitsPerPage must be lower than or equal to ${MAX_HITS_PER_PAGE}`,
+        ),
+      );
+    }
+
     const page = typeof params.page === "number" ? params.page : 0;
-    const matched = documents.filter((document) => matches(document, query));
+
+    const matched = documents.filter((document) =>
+      matches(document, query, getSearchable(params)),
+    );
+
     const nbHits = options.pagination?.nbHits ?? matched.length;
+
     const nbPages =
       options.pagination?.nbPages ?? Math.max(1, Math.ceil(nbHits / size));
 
@@ -260,9 +333,11 @@ export const createAlgoliaFake = (options: AlgoliaFakeOptions = {}) => {
           params,
           options.brokenHighlights === true,
         );
+
         if (typeof highlight === "undefined") {
           return { ...document };
         }
+
         return { ...document, _highlightResult: highlight };
       });
 
@@ -303,3 +378,35 @@ export const createAlgoliaFake = (options: AlgoliaFakeOptions = {}) => {
 
   return { client, calls, documents };
 };
+
+const isProduct = (value: unknown): value is AlgoliaFakeProduct =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "objectID")?.value === "string";
+
+/** Reads a fake document back as the product it is. */
+export const productSchema: StandardSchema<AlgoliaFakeProduct> = {
+  "~standard": {
+    version: 1,
+    vendor: "algolia-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/** The fake corpus as an index declares it. */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.objectID,
+  searchable: ["title", "brand"],
+  filterable: ["brand", "price", "tags"],
+  facetable: { brand: "string", price: "number", tags: "string" },
+  highlightable: ["title", "tags"],
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { titles: { searchable: ["title"] } },
+});

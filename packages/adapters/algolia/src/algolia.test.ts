@@ -1,105 +1,48 @@
-import {
-  SearchConfigurationError,
-  SearchProviderError,
-  UnsupportedSearchFeatureError,
-} from "@priemskiyyy/scout";
+import { Scout } from "@priemskiyyy/scout";
 import type {
   AdapterSearchRequest,
+  AdapterSort,
   FilterExpression,
 } from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
+
 import { algolia } from "src/algolia";
-import type { AlgoliaSearchClient } from "src/types/AlgoliaSearchClient";
-import type { AlgoliaSearchParams } from "src/types/AlgoliaSearchParams";
-import { createAlgoliaFake } from "src/algolia.fixture";
+import { createAlgoliaFake, productIndex } from "src/algolia.fixture";
 import type { AlgoliaFakeOptions } from "src/algolia.fixture";
+import type { AlgoliaAdapterOptions } from "src/types/AlgoliaAdapterOptions";
+import type { AlgoliaSearchClient } from "src/types/AlgoliaSearchClient";
+import type { AlgoliaSearchOptions } from "src/types/AlgoliaSearchOptions";
 
-const SORTS = {
-  relevance: { index: { name: "products" } },
-  priceAsc: { index: { name: "products_price_asc" } },
-};
+type AdapterOverrides = Partial<
+  Pick<AlgoliaAdapterOptions, "cache" | "paginationLimitedTo">
+>;
 
-const PROFILES = {
-  default: {},
-  strict: { searchParams: { typoTolerance: false } },
-};
+const setup = (
+  fakeOptions: AlgoliaFakeOptions = {},
+  overrides: AdapterOverrides = {},
+) => {
+  const fake = createAlgoliaFake(fakeOptions);
 
-test("numeric and boolean facets retain their declared value types", async () => {
-  const fake = createAlgoliaFake({
-    documents: [
-      {
-        objectID: "1",
-        title: "shoe",
-        brand: "acme",
-        price: 79,
-        tags: [],
-        inStock: true,
-      },
-    ],
-  });
   const adapter = algolia({
     client: fake.client,
-    index: { name: "products" },
-    sorts: SORTS,
-    profiles: PROFILES,
-    facets: { price: "number", inStock: "boolean" },
+    indexName: "products",
+    replicas: { priceAsc: "products_price_asc" },
+    profiles: { titles: { typoTolerance: false } },
+    ...overrides,
   });
-  const result = await adapter.search(
-    request({ query: "shoe", facets: ["price", "inStock"] }),
-    { signal: new AbortController().signal },
-  );
-  expect(result.facets.price?.values).toEqual([{ value: 79, count: 1 }]);
-  expect(result.facets.inStock?.values).toEqual([{ value: true, count: 1 }]);
-});
 
-test.each([
-  "filters",
-  "numericFilters",
-  "facetFilters",
-  "tagFilters",
-  "offset",
-  "length",
-])("profiles cannot override Scout's %s", (key) => {
-  const fake = createAlgoliaFake();
-  expect(() =>
-    algolia({
-      client: fake.client,
-      index: { name: "products" },
-      sorts: SORTS,
-      profiles: { default: { searchParams: { [key]: "hidden constraint" } } },
-    }),
-  ).toThrow(SearchConfigurationError);
-  expect(fake.calls).toEqual([]);
-});
-
-type AdapterOverrides = {
-  cache?: boolean;
-  paginationLimitedTo?: number;
+  return { fake, adapter };
 };
 
-const adapterFor = (
-  client: AlgoliaSearchClient,
-  overrides: AdapterOverrides = {},
-) =>
-  algolia({
-    client,
-    index: { name: "products" },
-    sorts: SORTS,
-    profiles: PROFILES,
-    ...(typeof overrides.cache === "boolean" ? { cache: overrides.cache } : {}),
-    ...(typeof overrides.paginationLimitedTo === "number"
-      ? { paginationLimitedTo: overrides.paginationLimitedTo }
-      : {}),
-  });
-
-const request = (
-  overrides: Partial<AdapterSearchRequest<AlgoliaSearchParams>> = {},
-): AdapterSearchRequest<AlgoliaSearchParams> => ({
+const getRequest = (
+  overrides: Partial<AdapterSearchRequest<AlgoliaSearchOptions>> = {},
+): AdapterSearchRequest<AlgoliaSearchOptions> => ({
   index: "products",
   query: "running",
+  searchable: ["title", "brand"],
   profile: "default",
-  sort: "relevance",
-  filter: { type: "constant", value: true },
+  sort: null,
+  filter: null,
   facets: [],
   highlights: [],
   page: { current: 1, size: 10 },
@@ -107,465 +50,258 @@ const request = (
   ...overrides,
 });
 
-const searchWith = (
-  fake: ReturnType<typeof createAlgoliaFake>,
-  overrides: Partial<AdapterSearchRequest<AlgoliaSearchParams>> = {},
+const search = async (
+  overrides: Partial<AdapterSearchRequest<AlgoliaSearchOptions>> = {},
+  fakeOptions: AlgoliaFakeOptions = {},
   adapterOverrides: AdapterOverrides = {},
-) =>
-  adapterFor(fake.client, adapterOverrides).search(request(overrides), {
+) => {
+  const { fake, adapter } = setup(fakeOptions, adapterOverrides);
+
+  const response = await adapter.search(getRequest(overrides), {
     signal: new AbortController().signal,
   });
 
-const paramsOf = (fake: ReturnType<typeof createAlgoliaFake>) =>
-  fake.calls[0]?.searchParams;
-
-/** Runs one filter and returns the string Algolia would have been given. */
-const filterString = async (
-  filter: FilterExpression,
-  fakeOptions: AlgoliaFakeOptions = {},
-) => {
-  const fake = createAlgoliaFake(fakeOptions);
-  await searchWith(fake, { filter });
-  return paramsOf(fake)?.filters;
+  return { response, call: fake.calls[0] };
 };
 
-const comparison = (
-  field: string,
-  operator: Extract<FilterExpression, { type: "comparison" }>["operator"],
-  value: unknown,
-): FilterExpression => ({ type: "comparison", field, operator, value });
+const getScout = (
+  fakeOptions: AlgoliaFakeOptions = {},
+  overrides: AdapterOverrides = {},
+) => {
+  const { fake, adapter } = setup(fakeOptions, overrides);
 
-const failed = (promise: Promise<unknown>) =>
-  promise.then(
-    () => undefined,
-    (reason: unknown) => reason,
-  );
+  const scout = new Scout({
+    indexes: { products: productIndex },
+    adapters: { products: adapter },
+  });
 
-test("it declares what it can actually do, including that it cannot cancel", () => {
-  const adapter = adapterFor(createAlgoliaFake().client);
+  return { fake, products: scout.index("products") };
+};
 
-  expect(adapter.name).toBe("algolia");
-  expect(adapter.capabilities.pagination.maxPageSize).toBe(1000);
-  expect(adapter.capabilities.cancellation).toBe("logical");
-  expect(adapter.capabilities.highlights).toBe("parts");
+const PRICE_ASC: AdapterSort = {
+  name: "priceAsc",
+  by: [{ field: "price", direction: "asc" }],
+};
+
+const getRejection = async (pending: Promise<unknown>) => {
+  try {
+    await pending;
+  } catch (error) {
+    return error;
+  }
+
+  throw new Error("The search answered.");
+};
+
+test("creating the adapter asks nothing of the client", () => {
+  const unusable = () => {
+    throw new Error("The client was used.");
+  };
+
+  const client: AlgoliaSearchClient = {
+    searchSingleIndex: unusable,
+    searchSingleIndexWithHTTPInfo: unusable,
+  };
+
+  expect(() => algolia({ client, indexName: "products" })).not.toThrow();
 });
 
-test("it reserves every parameter that would overwrite a scout owned field", () => {
-  const adapter = adapterFor(createAlgoliaFake().client);
+test("a profile that sets a parameter Scout writes is refused when the adapter is made", () => {
+  const fake = createAlgoliaFake();
 
-  expect(adapter.reservedOptions).toEqual([
-    "filters",
-    "query",
-    "page",
-    "hitsPerPage",
-    "facets",
-    "attributesToHighlight",
-    "highlightPreTag",
-    "highlightPostTag",
-    "numericFilters",
-    "facetFilters",
-    "tagFilters",
-    "offset",
-    "length",
+  expect(() =>
+    algolia({
+      client: fake.client,
+      indexName: "products",
+      profiles: {
+        strict: Object.fromEntries([["filters", "hidden constraint"]]),
+      },
+    }),
+  ).toThrowError(
+    expect.objectContaining({
+      code: "configuration",
+      message:
+        "profiles.strict.filters is written by Scout from the search itself.",
+    }),
+  );
+  expect(fake.calls).toEqual([]);
+});
+
+test("the fingerprint names the primary index and every replica it may read", () => {
+  expect(setup().adapter.fingerprint()).toBe(
+    "products priceAsc=products_price_asc",
+  );
+});
+
+test("relevance reads the primary index, and a sort reads its replica", async () => {
+  const relevance = await search();
+  const sorted = await search({ sort: PRICE_ASC });
+
+  expect(relevance.call?.indexName).toBe("products");
+  expect(sorted.call?.indexName).toBe("products_price_asc");
+  expect(sorted.call?.searchParams).not.toHaveProperty("sort");
+});
+
+test("an index whose sorts have no replicas is refused where the Scout is built", () => {
+  const adapter = algolia({
+    client: createAlgoliaFake().client,
+    indexName: "products",
+  });
+
+  expect(adapter.sorts).toEqual({});
+  expect(
+    () =>
+      new Scout({
+        indexes: { products: productIndex },
+        // @ts-expect-error the adapter has no replica for priceAsc
+        adapters: { products: adapter },
+      }),
+  ).toThrowError(expect.objectContaining({ code: "configuration" }));
+});
+
+test.each([
+  [
+    "a sort with no replica",
+    {
+      sort: { name: "newest", by: [{ field: "date", direction: "desc" }] },
+    },
+    "configuration",
+  ],
+  [
+    "a filter Algolia's grammar cannot say",
+    {
+      filter: {
+        type: "not",
+        expression: {
+          type: "comparison",
+          field: "price",
+          operator: "between",
+          value: [10, 20],
+        },
+      } satisfies FilterExpression,
+    },
+    "unsupported-feature",
+  ],
+  [
+    "a page larger than Algolia returns",
+    { page: { current: 1, size: 1001 } },
+    "unsupported-feature",
+  ],
+] satisfies [
+  string,
+  Partial<AdapterSearchRequest<AlgoliaSearchOptions>>,
+  string,
+][])(
+  "%s is refused before anything is sent",
+  async (_what, overrides, code) => {
+    const { fake, adapter } = setup();
+
+    await expect(
+      adapter.search(getRequest(overrides), {
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toMatchObject({ code });
+    expect(fake.calls).toEqual([]);
+  },
+);
+
+test.each([
+  "query",
+  "filters",
+  "page",
+  "hitsPerPage",
+  "offset",
+  "restrictSearchableAttributes",
+])(
+  "a provider option Scout writes, %s, is refused before anything is sent",
+  async (key) => {
+    const { fake, products } = getScout();
+
+    await expect(
+      products
+        .search("running")
+        .provider(Object.fromEntries([[key, "forged"]]))
+        .execute(),
+    ).rejects.toMatchObject({
+      code: "configuration",
+      message: `provider.${key} is written by Scout from the search itself.`,
+    });
+    expect(fake.calls).toHaveLength(0);
+  },
+);
+
+test("the profile's fields restrict the attributes Algolia searches", async () => {
+  const titles = await search({
+    query: "acme",
+    searchable: ["title"],
+    profile: "titles",
+  });
+
+  expect(titles.call?.searchParams).toMatchObject({
+    restrictSearchableAttributes: ["title"],
+    typoTolerance: false,
+  });
+  expect(titles.response.hits.map((hit) => hit.native.objectID)).toEqual([
+    "1",
+    "3",
   ]);
 });
 
-test("its fingerprint names the primary index and every replica it may read", () => {
-  const adapter = adapterFor(createAlgoliaFake().client);
-
-  expect(adapter.fingerprint()).toBe(
-    "products relevance=products priceAsc=products_price_asc",
-  );
-});
-
-test("a named sort reads its replica index rather than a sort parameter", async () => {
-  const fake = createAlgoliaFake();
-
-  await searchWith(fake, { sort: "priceAsc" });
-
-  expect(fake.calls[0]?.indexName).toBe("products_price_asc");
-  expect(paramsOf(fake)).not.toHaveProperty("sort");
-});
-
-test("a sort the adapter was not configured for is a configuration error", async () => {
-  const fake = createAlgoliaFake();
-
-  const error = await failed(searchWith(fake, { sort: "newest" }));
-
-  expect(error).toBeInstanceOf(SearchConfigurationError);
-  expect(error).toHaveProperty("path", "sorts.newest");
-  expect(fake.calls).toHaveLength(0);
-});
-
-test("a profile the adapter was not configured for is a configuration error", async () => {
-  const fake = createAlgoliaFake();
-
-  const error = await failed(searchWith(fake, { profile: "boosted" }));
-
-  expect(error).toBeInstanceOf(SearchConfigurationError);
-  expect(error).toHaveProperty("path", "profiles.boosted");
-});
-
-test("a string equality is quoted so its content cannot become syntax", async () => {
-  expect(await filterString(comparison("brand", "eq", "acme"))).toBe(
-    'brand:"acme"',
-  );
-});
-
-test("a hostile value keeps its quotes and backslashes as data", async () => {
-  expect(await filterString(comparison("brand", "eq", 'Ac"me\\ & Co'))).toBe(
-    'brand:"Ac\\"me\\\\ & Co"',
-  );
-});
-
-test("a value that spells an operator is quoted rather than parsed", async () => {
-  expect(await filterString(comparison("brand", "eq", "acme OR bolt"))).toBe(
-    'brand:"acme OR bolt"',
-  );
-});
-
-test("an attribute name that is not a bare identifier is quoted too", async () => {
-  expect(await filterString(comparison("brand name", "eq", "acme"))).toBe(
-    '"brand name":"acme"',
-  );
-});
-
-test("a number compares numerically and a boolean reads as a facet", async () => {
-  expect(await filterString(comparison("price", "eq", 79))).toBe("price = 79");
-  expect(await filterString(comparison("inStock", "eq", true))).toBe(
-    "inStock:true",
-  );
-});
-
-test("a negation uses NOT for text and the numeric operator for numbers", async () => {
-  expect(await filterString(comparison("brand", "neq", "acme"))).toBe(
-    'NOT brand:"acme"',
-  );
-  expect(await filterString(comparison("price", "neq", 79))).toBe(
-    "price != 79",
-  );
-});
-
-test("a set becomes a disjunction and its negation a conjunction of negations", async () => {
-  expect(await filterString(comparison("brand", "in", ["acme", "bolt"]))).toBe(
-    '(brand:"acme" OR brand:"bolt")',
-  );
-  expect(
-    await filterString(comparison("brand", "not-in", ["acme", "bolt"])),
-  ).toBe('NOT brand:"acme" AND NOT brand:"bolt"');
-  expect(await filterString(comparison("price", "not-in", [1, 2]))).toBe(
-    "price != 1 AND price != 2",
-  );
-});
-
-test("comparisons and ranges use algolia's numeric syntax", async () => {
-  expect(await filterString(comparison("price", "gt", 10))).toBe("price > 10");
-  expect(await filterString(comparison("price", "gte", 10))).toBe(
-    "price >= 10",
-  );
-  expect(await filterString(comparison("price", "lt", 10))).toBe("price < 10");
-  expect(await filterString(comparison("price", "lte", 10))).toBe(
-    "price <= 10",
-  );
-  expect(await filterString(comparison("price", "between", [10, 100]))).toBe(
-    "price:10 TO 100",
-  );
-});
-
-test("only OR groups are parenthesised in Algolia's boolean grammar", async () => {
-  expect(
-    await filterString({
-      type: "and",
-      expressions: [
-        comparison("brand", "eq", "acme"),
-        {
-          type: "or",
-          expressions: [
-            comparison("price", "lt", 50),
-            comparison("price", "gt", 100),
-          ],
-        },
-      ],
-    }),
-  ).toBe('brand:"acme" AND (price < 50 OR price > 100)');
-});
-
-test("a single facet is negated without unsupported group parentheses", async () => {
-  expect(
-    await filterString({
-      type: "not",
-      expression: comparison("brand", "eq", "acme"),
-    }),
-  ).toBe('NOT brand:"acme"');
-});
-
-test("Algolia refuses boolean combinations its grammar cannot express before dispatch", async () => {
-  const filters: FilterExpression[] = [
-    {
-      type: "not",
-      expression: {
-        type: "or",
-        expressions: [
-          comparison("brand", "eq", "a"),
-          comparison("brand", "eq", "b"),
-        ],
-      },
-    },
-    {
-      type: "or",
-      expressions: [
-        comparison("brand", "eq", "a"),
-        {
-          type: "and",
-          expressions: [
-            comparison("brand", "eq", "b"),
-            comparison("price", "gt", 10),
-          ],
-        },
-      ],
-    },
-    {
-      type: "or",
-      expressions: [
-        comparison("brand", "eq", "a"),
-        comparison("price", "eq", 10),
-      ],
-    },
-  ];
-  for (const filter of filters) {
-    const fake = createAlgoliaFake();
-    await expect(searchWith(fake, { filter })).rejects.toThrowError(
-      UnsupportedSearchFeatureError,
-    );
-    expect(fake.calls).toEqual([]);
-  }
-});
-
-test("a comparison against text the engine cannot order is refused", async () => {
-  const error = await failed(filterString(comparison("price", "gt", "ten")));
-
-  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
-  expect(error).toHaveProperty("feature", "filters.gt");
-});
-
-test("an equality against a value with no filter spelling is refused", async () => {
-  const error = await failed(filterString(comparison("brand", "eq", null)));
-
-  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
-  expect(error).toHaveProperty("feature", "filters.eq");
-});
-
-test("a range missing a bound is refused rather than half applied", async () => {
-  const error = await failed(
-    filterString(comparison("price", "between", [10])),
-  );
-
-  expect(error).toBeInstanceOf(UnsupportedSearchFeatureError);
-  expect(error).toHaveProperty("feature", "filters.between");
-});
-
-test("a true constant sends no filter at all", async () => {
-  const fake = createAlgoliaFake();
-
-  await searchWith(fake);
-
-  expect(paramsOf(fake)).not.toHaveProperty("filters");
-});
-
-test("a match all constant inside an or still matches everything", async () => {
-  const fake = createAlgoliaFake();
-
-  await searchWith(fake, {
-    filter: {
-      type: "or",
-      expressions: [
-        comparison("brand", "eq", "acme"),
-        { type: "constant", value: true },
-      ],
-    },
-  });
-
-  expect(paramsOf(fake)).not.toHaveProperty("filters");
-});
-
-test("a match none constant inside an and matches nothing", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    filter: {
-      type: "and",
-      expressions: [
-        comparison("brand", "eq", "acme"),
-        { type: "constant", value: false },
-      ],
-    },
-  });
-
-  expect(fake.calls).toHaveLength(0);
-  expect(response.hits).toEqual([]);
-});
-
-test("a neutral constant inside a group leaves the other term alone", async () => {
-  expect(
-    await filterString({
-      type: "and",
-      expressions: [
-        comparison("brand", "eq", "acme"),
-        { type: "constant", value: true },
-      ],
-    }),
-  ).toBe('brand:"acme"');
-});
-
-test("a false constant answers empty without paying for a query", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    filter: { type: "constant", value: false },
-    facets: ["brand"],
-  });
-
-  expect(fake.calls).toHaveLength(0);
-  expect(response.hits).toEqual([]);
-  // Zero matches is a count of matches rather than of what pagination could
-  // reach, and a contradiction leaves nothing to be uncertain about.
-  expect(response.total).toEqual({
-    value: 0,
-    accuracy: "exact",
-    scope: "matches",
-  });
-  expect(response.native).toBeNull();
-  expect(response.facets.brand).toEqual({
-    field: "brand",
-    values: [],
-    exhaustive: true,
-    native: null,
-  });
-});
-
-test("scout page one is sent as algolia page zero", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, { page: { current: 1, size: 2 } });
-
-  expect(paramsOf(fake)?.page).toBe(0);
-  expect(paramsOf(fake)?.hitsPerPage).toBe(2);
-  expect(response.page.current).toBe(1);
-  expect(response.page.previous).toBeNull();
-});
-
-test("a later page is translated back into scout's numbering", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    page: { current: 2, size: 2 },
-    query: "",
-  });
-
-  expect(paramsOf(fake)?.page).toBe(1);
-  expect(response.page.current).toBe(2);
-  expect(response.page.previous).toBe(1);
-  expect(response.page.next).toBe(3);
-});
-
-test("pagination stops at the last page the limit can reach", async () => {
-  const fake = createAlgoliaFake({ pagination: { nbHits: 100, nbPages: 50 } });
-
-  const response = await searchWith(
-    fake,
-    { page: { current: 2, size: 2 }, query: "" },
+// Algolia answers a page past the window with nothing, so the pages end there
+// while the total still counts every match.
+test("paging ends at the pagination window, whatever the total counts", async () => {
+  const { products } = getScout(
+    { pagination: { nbHits: 100, nbPages: 50 } },
     { paginationLimitedTo: 4 },
   );
 
-  expect(response.page.next).toBeNull();
+  const search = products.search("").page({ size: 2 });
+  const first = await search.execute();
+  const last = await search.page({ current: 2 }).execute();
+
+  expect(first.page.next).toBe(2);
+  expect(last.total).toMatchObject({ value: 100, scope: "matches" });
+  expect(last.page.next).toBeNull();
 });
 
-test("matches past the limit are counted as matches, not as retrievable", async () => {
-  const fake = createAlgoliaFake({ pagination: { nbHits: 100, nbPages: 50 } });
-
-  const response = await searchWith(
-    fake,
-    { page: { current: 1, size: 2 }, query: "" },
-    { paginationLimitedTo: 4 },
-  );
-
-  expect(response.total).toEqual({
-    value: 100,
-    accuracy: "exact",
-    scope: "matches",
-  });
-  expect(response.page.next).toBe(2);
-});
-
-test("an approximated count is reported as estimated", async () => {
-  const fake = createAlgoliaFake({ exhaustive: { nbHits: false } });
-
-  const response = await searchWith(fake, { query: "" });
-
-  expect(response.total).toEqual({
-    value: 5,
-    accuracy: "estimated",
-    scope: "retrievable",
-  });
-});
-
-test("a count algolia said nothing about is unknown, not exact", async () => {
-  const fake = createAlgoliaFake({ exhaustive: null });
-
-  const response = await searchWith(fake, { query: "" });
-
-  expect(response.total).toEqual({ accuracy: "unknown", scope: "retrievable" });
-});
-
-test("a response with no counts at all keeps its uncertainty", async () => {
+test("a response with nothing but hits answers with nothing invented", async () => {
   const bare: AlgoliaSearchClient = {
     searchSingleIndex: () => Promise.resolve({ hits: [] }),
     searchSingleIndexWithHTTPInfo: () =>
       Promise.resolve({ data: { hits: [] } }),
   };
 
-  const response = await adapterFor(bare).search(request(), {
+  const response = await algolia({
+    client: bare,
+    indexName: "products",
+  }).search(getRequest({ facets: ["brand"] }), {
     signal: new AbortController().signal,
   });
 
   expect(response.total).toEqual({ accuracy: "unknown", scope: "unknown" });
-  expect(response.page.next).toBe("unknown");
   expect(response.took).toBeNull();
+  expect(response.facets).toEqual({});
 });
 
-test("facet buckets carry their counts and algolia's own exhaustiveness", async () => {
-  const fake = createAlgoliaFake();
+// Algolia names every facet value as a string. The adapter passes it on, and
+// the core reads it as the type the index declared.
+test("facet values arrive as strings and come out as the declared types", async () => {
+  const result = await getScout()
+    .products.search("running")
+    .facets("price")
+    .execute();
 
-  const response = await searchWith(fake, { query: "", facets: ["brand"] });
-
-  expect(paramsOf(fake)?.facets).toEqual(["brand"]);
-  expect(response.facets.brand?.values).toEqual([
-    { value: "acme", count: 2 },
-    { value: "bolt", count: 1 },
-    { value: "mug co", count: 1 },
-    { value: "forge", count: 1 },
+  expect(result.facets.price.values).toEqual([
+    { value: 79, count: 1 },
+    { value: 129, count: 1 },
   ]);
-  expect(response.facets.brand?.exhaustive).toBe(true);
 });
 
-test("a facet algolia said nothing about is unknown rather than exhaustive", async () => {
-  const fake = createAlgoliaFake({ exhaustive: { nbHits: true } });
+test("highlights come back as parts, split on the markers this search sent", async () => {
+  const { response, call } = await search({ highlights: ["title"] });
 
-  const response = await searchWith(fake, { query: "", facets: ["brand"] });
-
-  expect(response.facets.brand?.exhaustive).toBe("unknown");
-});
-
-test("highlights come back as parts, split on a marker the adapter chose", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    query: "running",
-    highlights: ["title"],
-  });
-
-  expect(paramsOf(fake)?.attributesToHighlight).toEqual(["title"]);
-  expect(response.hits[0]?.highlights.title).toEqual([
+  expect(call?.searchParams.attributesToHighlight).toEqual(["title"]);
+  expect(response.hits[0]?.highlights["title"]).toEqual([
     {
       path: ["title"],
       truncated: false,
@@ -578,93 +314,18 @@ test("highlights come back as parts, split on a marker the adapter chose", async
   ]);
 });
 
-test("a document that contains markup cannot forge a highlight", async () => {
-  const fake = createAlgoliaFake();
+test("the markers are made for each search and are never Algolia's default tag", async () => {
+  const first = await search({ highlights: ["title"] });
+  const second = await search({ highlights: ["title"] });
+  const open = first.call?.searchParams.highlightPreTag;
 
-  const response = await searchWith(fake, {
-    query: "markup",
-    highlights: ["title"],
-  });
-  const parts = response.hits[0]?.highlights.title?.[0]?.parts ?? [];
-
-  expect(parts).toEqual([
-    { text: "Lamp with <em>", matched: false },
-    { text: "markup", matched: true },
-    { text: "</em> inside", matched: false },
-  ]);
-  expect(parts.filter((part) => part.matched)).toHaveLength(1);
+  expect(open).not.toBe("<em>");
+  expect(open).not.toBe(second.call?.searchParams.highlightPreTag);
 });
 
-test("the highlight marker is never the default tag and never repeats", async () => {
-  const fake = createAlgoliaFake();
-  const adapter = adapterFor(fake.client);
-  const options = { signal: new AbortController().signal };
+test("the document drops Algolia's metadata, which stays on the raw hit and response", async () => {
+  const { response } = await search({ highlights: ["title"] });
 
-  await adapter.search(request({ highlights: ["title"] }), options);
-  await adapter.search(request({ highlights: ["title"] }), options);
-
-  expect(fake.calls[0]?.searchParams.highlightPreTag).not.toBe("<em>");
-  expect(fake.calls[0]?.searchParams.highlightPreTag).not.toBe(
-    fake.calls[1]?.searchParams.highlightPreTag,
-  );
-});
-
-test("an array field reports which element matched", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    query: "running",
-    highlights: ["tags"],
-  });
-
-  expect(response.hits[0]?.highlights.tags).toEqual([
-    {
-      path: ["tags", 0],
-      truncated: false,
-      parts: [{ text: "running", matched: true }],
-    },
-    {
-      path: ["tags", 1],
-      truncated: false,
-      parts: [{ text: "sale", matched: false }],
-    },
-  ]);
-});
-
-test("an unbalanced marker degrades to plain text instead of a guess", async () => {
-  const fake = createAlgoliaFake({ brokenHighlights: true });
-
-  const response = await searchWith(fake, {
-    query: "running",
-    highlights: ["title"],
-  });
-
-  expect(response.hits[0]?.highlights.title?.[0]?.parts).toEqual([
-    { text: "Acme running shoe", matched: false },
-  ]);
-});
-
-test("a requested highlight algolia did not return is empty, not missing", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    query: "running",
-    highlights: ["summary"],
-  });
-
-  expect(response.hits[0]?.highlights.summary).toEqual([]);
-});
-
-test("the raw hit and the raw response stay reachable", async () => {
-  const fake = createAlgoliaFake();
-
-  const response = await searchWith(fake, {
-    query: "running",
-    highlights: ["title"],
-  });
-
-  expect(response.hits[0]?.native).toHaveProperty("objectID", "1");
-  expect(response.hits[0]?.native).toHaveProperty("_highlightResult");
   expect(response.hits[0]?.document).toEqual({
     objectID: "1",
     title: "Acme running shoe",
@@ -672,53 +333,25 @@ test("the raw hit and the raw response stay reachable", async () => {
     price: 79,
     tags: ["running", "sale"],
   });
+  expect(response.hits[0]?.native).toHaveProperty("_highlightResult");
   expect(response.native).toHaveProperty("queryID", "fake-query-id");
   expect(response.took).toBe(3);
 });
 
 test("the client's own caches are bypassed unless the application asks for them", async () => {
-  const bypassed = createAlgoliaFake();
-  const cached = createAlgoliaFake();
+  const bypassed = await search();
+  const cached = await search({}, {}, { cache: true });
 
-  await searchWith(bypassed);
-  await searchWith(cached, {}, { cache: true });
-
-  expect(bypassed.calls[0]?.method).toBe("searchSingleIndexWithHTTPInfo");
-  expect(cached.calls[0]?.method).toBe("searchSingleIndex");
+  expect(bypassed.call?.method).toBe("searchSingleIndexWithHTTPInfo");
+  expect(cached.call?.method).toBe("searchSingleIndex");
 });
 
-test("a profile and provider options reach algolia together", async () => {
-  const fake = createAlgoliaFake();
+test("a failing client reaches the caller as a provider error keeping its cause", async () => {
+  const cause = new Error("index not found");
 
-  await searchWith(fake, {
-    profile: "strict",
-    provider: { distinct: true },
-  });
+  const error = await getRejection(
+    getScout({ fail: cause }).products.search("running").execute(),
+  );
 
-  expect(paramsOf(fake)?.typoTolerance).toBe(false);
-  expect(paramsOf(fake)?.distinct).toBe(true);
-});
-
-test("a provider option can never overwrite what scout already decided", async () => {
-  const fake = createAlgoliaFake();
-
-  await searchWith(fake, {
-    query: "running",
-    page: { current: 1, size: 10 },
-    provider: { query: "forged", page: 99 },
-  });
-
-  expect(paramsOf(fake)?.query).toBe("running");
-  expect(paramsOf(fake)?.page).toBe(0);
-});
-
-test("a failing client is reported as a provider error with its cause", async () => {
-  const failure = new Error("index not found");
-  const fake = createAlgoliaFake({ fail: failure });
-
-  const error = await failed(searchWith(fake));
-
-  expect(error).toBeInstanceOf(SearchProviderError);
-  expect(error).toHaveProperty("adapter", "algolia");
-  expect(error).toHaveProperty("cause", failure);
+  expect(error).toMatchObject({ code: "provider", cause });
 });
