@@ -1,24 +1,26 @@
+import type { MeilisearchSearchParams } from "src/types/MeilisearchSearchParams";
+
 /**
- * The Meilisearch search parameters Scout does not own, so a profile or a
- * `.provider()` call can set them. Scout owns `q`, `filter`, `sort`, `facets`,
- * the pagination pair and the three highlight keys, which is what
- * `reservedOptions` says.
+ * The Meilisearch parameters a profile or a `.provider()` call may set. Scout
+ * writes the rest from the search itself.
  *
  * @example
  * ```ts
- * const options: MeilisearchSearchOptions = { attributesToSearchOn: ["name"], matchingStrategy: "all" };
+ * products.search("shoe").provider({ matchingStrategy: "all" });
  * ```
  * @see [meilisearch adapter](https://priemskiyyy.github.io/scout/adapters.html#meilisearch)
  */
-export type MeilisearchSearchOptions = {
-  attributesToSearchOn?: string[] | null;
-  attributesToRetrieve?: string[];
-  attributesToCrop?: string[];
-  cropLength?: number;
-  cropMarker?: string;
-  matchingStrategy?: "all" | "last" | "frequency";
-  rankingScoreThreshold?: number;
-  showRankingScore?: boolean;
-  distinct?: string;
-  locales?: string[];
-};
+export type MeilisearchSearchOptions = Omit<
+  MeilisearchSearchParams,
+  | "attributesToSearchOn"
+  | "filter"
+  | "sort"
+  | "facets"
+  | "attributesToHighlight"
+  | "highlightPreTag"
+  | "highlightPostTag"
+  | "page"
+  | "hitsPerPage"
+  | "offset"
+  | "limit"
+>;

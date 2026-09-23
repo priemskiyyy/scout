@@ -1,30 +1,23 @@
-import type { MeilisearchProfiles } from "src/types/MeilisearchProfiles";
-import type { MeilisearchSorts } from "src/types/MeilisearchSorts";
 import type { MeilisearchIndexClient } from "src/types/MeilisearchIndexClient";
-import type { FacetValueType } from "@priemskiyyy/scout";
+import type { MeilisearchSearchOptions } from "src/types/MeilisearchSearchOptions";
 
 /**
- * Configures a borrowed Meilisearch index, named search profiles and sorts.
+ * The index to search on a Meilisearch client the application owns.
  *
  * @example
  * ```ts
- * const adapter = meilisearch({ index: client.index("products"),
- *   profiles: { default: {} }, sorts: { relevance: {}, priceAsc: { sort: ["price:asc"] } } });
+ * const options: MeilisearchAdapterOptions = {
+ *   index: client.index("products"),
+ *   profiles: { names: { matchingStrategy: "all" } },
+ * };
  * ```
  * @see [meilisearch adapter](https://priemskiyyy.github.io/scout/adapters.html#meilisearch)
  */
-export type MeilisearchAdapterOptions<
-  TProfiles extends MeilisearchProfiles = MeilisearchProfiles,
-  TSorts extends MeilisearchSorts = MeilisearchSorts,
-> = {
+export type MeilisearchAdapterOptions = {
   /** The index client the application built and owns. */
   index: MeilisearchIndexClient;
-  /** Every profile name the index declares, and the options it stands for. */
-  profiles: TProfiles;
-  /** Every sort name the index declares, and the Meilisearch sort it becomes. */
-  sorts: TSorts;
-  /** Types of non-string facet labels. Omitted fields retain their string value. */
-  facets?: Readonly<Record<string, FacetValueType>>;
+  /** Tuning for the index's profiles, keyed by profile name. */
+  profiles?: Readonly<Record<string, MeilisearchSearchOptions>>;
   /**
    * `"page"` sends `page` and `hitsPerPage` and reports an exhaustive total.
    * `"offset"` sends `offset` and `limit` and reports an estimate. Scout is
