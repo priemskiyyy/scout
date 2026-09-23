@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Outpost",
+    "slug": "scout-outpost",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "platforms": ["ios", "android", "web"],
+    "ios": {
+      "bundleIdentifier": "dev.scout.outpost"
+    },
+    "android": {
+      "package": "dev.scout.outpost"
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    }
+  }
+}
