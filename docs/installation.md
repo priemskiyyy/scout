@@ -18,17 +18,20 @@ never opens a connection or holds a client of its own.
 
 ## The packages
 
-| Package                             | What it is                                 | Peer dependencies                                 |
-| ----------------------------------- | ------------------------------------------ | ------------------------------------------------- |
-| `@priemskiyyy/scout`                | The core: indexes, builder, filters, types | `vitest` (optional, only for the testing subpath) |
-| `@priemskiyyy/scout-typesense`      | Typesense adapter                          | `@priemskiyyy/scout`, `typesense` 3               |
-| `@priemskiyyy/scout-algolia`        | Algolia adapter                            | `@priemskiyyy/scout`, `algoliasearch` 5           |
-| `@priemskiyyy/scout-meilisearch`    | Meilisearch adapter                        | `@priemskiyyy/scout`, `meilisearch` 0.50 or newer |
-| `@priemskiyyy/scout-orama`          | Orama adapter, in process                  | `@priemskiyyy/scout`, `@orama/orama` 3            |
-| `@priemskiyyy/scout-minisearch`     | MiniSearch adapter, in process             | `@priemskiyyy/scout`, `minisearch` 7              |
-| `@priemskiyyy/scout-fuse`           | Fuse.js adapter, in process                | `@priemskiyyy/scout`, `fuse.js` >=7.5 <8          |
-| `@priemskiyyy/scout-http`           | Your JSON search endpoint                  | `@priemskiyyy/scout`                              |
-| `@priemskiyyy/scout-tanstack-query` | Query options built from a search          | `@priemskiyyy/scout`, `@tanstack/query-core` 5    |
+| Package                             | What it is                                 | Peer dependencies                                        |
+| ----------------------------------- | ------------------------------------------ | -------------------------------------------------------- |
+| `@priemskiyyy/scout`                | The core: indexes, builder, filters, types | `vitest` (optional, only for the testing subpath)        |
+| `@priemskiyyy/scout-typesense`      | Typesense adapter                          | `@priemskiyyy/scout`, `typesense` 3                      |
+| `@priemskiyyy/scout-algolia`        | Algolia adapter                            | `@priemskiyyy/scout`, `algoliasearch` 5                  |
+| `@priemskiyyy/scout-meilisearch`    | Meilisearch adapter                        | `@priemskiyyy/scout`, `meilisearch` 0.50 or newer        |
+| `@priemskiyyy/scout-mongodb`        | MongoDB Search adapter, server only        | `@priemskiyyy/scout`, `mongodb` 7                        |
+| `@priemskiyyy/scout-elasticsearch`  | Elasticsearch adapter, server only         | `@priemskiyyy/scout`, `@elastic/elasticsearch` 9         |
+| `@priemskiyyy/scout-opensearch`     | OpenSearch adapter, server only            | `@priemskiyyy/scout`, `@opensearch-project/opensearch` 3 |
+| `@priemskiyyy/scout-orama`          | Orama adapter, in process                  | `@priemskiyyy/scout`, `@orama/orama` 3                   |
+| `@priemskiyyy/scout-minisearch`     | MiniSearch adapter, in process             | `@priemskiyyy/scout`, `minisearch` 7, 7.2 to browse      |
+| `@priemskiyyy/scout-fuse`           | Fuse.js adapter, in process                | `@priemskiyyy/scout`, `fuse.js` >=7.5 <8                 |
+| `@priemskiyyy/scout-http`           | Your JSON search endpoint                  | `@priemskiyyy/scout`                                     |
+| `@priemskiyyy/scout-tanstack-query` | Query options built from a search          | `@priemskiyyy/scout`, `@tanstack/query-core` 5           |
 
 [Choose an adapter](adapters.md) compares what each engine can actually do
 behind the contract.
@@ -65,20 +68,29 @@ the schema you write.
   serves the browser, Node and React Native, and the version of the SDK you
   installed is the one that runs.
 
-## Test-only subpaths
+## Subpaths
 
-Two subpaths exist for testing and never reach a production bundle:
+Three subpaths sit beside the core. One is for adapter authors, and two are for
+tests and never reach a production bundle:
 
 ```ts
+import {
+  createHighlightMarkers,
+  matchesFilter,
+  splitHighlight,
+} from "@priemskiyyy/scout/adapter";
 import { createMockSearchAdapter } from "@priemskiyyy/scout/mock";
 import { testSearchAdapter } from "@priemskiyyy/scout/testing";
 ```
 
-`./mock` is a deliberately badly behaved adapter for testing an application
-against held answers, out-of-order completion and malformed documents. `./testing`
-is the conformance suite every adapter runs, described in
-[writing an adapter](writing-an-adapter.md). Both declare `vitest` as an
-optional peer dependency, so installing Scout without vitest is not a warning
-unless you import them.
+`./adapter` holds the helpers an adapter builds on: per search highlight
+markers, splitting marked text into safe parts, and the reference filter
+matcher an in-process engine runs over its whole match set. `./mock` is a
+deliberately badly behaved adapter for testing an application against held
+answers, out-of-order completion, ignored aborts and refusals. `./testing` is
+the conformance suite every adapter runs, described in
+[writing an adapter](writing-an-adapter.md). The two test subpaths declare
+`vitest` as an optional peer dependency, so installing Scout without vitest is
+not a warning unless you import them.
 
 Next: [getting started](getting-started.md) runs one search end to end.

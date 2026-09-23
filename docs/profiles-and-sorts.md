@@ -1,160 +1,109 @@
 ---
-description: "Why an index declares its sort and profile names and the adapter is required to satisfy them, and what one name becomes in each engine."
+description: "Named sorts defined by the fields they order by, named profiles defined by the fields they search, what each becomes in an engine, and how an adapter tunes a profile or serves a sort from configuration of its own."
 ---
 
 # Profiles and sorts
 
-An index declares the names its application uses. The adapter is configured with
-one entry per name.
+An index names the behaviours its application asks for, and defines each one by
+fields of the document.
 
 ```ts
 const products = index({
   schema: Product,
   id: (product) => product.id,
+  searchable: ["name", "brand"],
   filterable: ["brand", "price", "inStock", "tags"],
-  facetable: ["brand"],
-  highlightable: ["name"],
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default", "autocomplete"],
-  adapter: typesense({
-    client,
-    collection: "products",
-    profiles: {
-      default: { queryBy: ["name", "brand"], prefix: true },
-      autocomplete: { queryBy: ["name"], prefix: true },
-    },
-    sorts: { relevance: {}, priceAsc: { sortBy: "price:asc" } },
-  }),
+  sorts: {
+    priceAsc: { price: "asc" },
+    cheapestByName: { price: "asc", name: "asc" },
+  },
+  profiles: { autocomplete: { searchable: ["name"] } },
 });
 ```
 
-A search then asks for a name and nothing else:
+Once the index is bound to a `Scout`, a search asks for a name and nothing
+else:
 
 ```ts
-const result = await products
+const result = await scout
+  .index("products")
   .search("boots")
   .profile("autocomplete")
   .sort("priceAsc")
   .execute();
 ```
 
-`products.search("boots").sort("priceDesc")` does not compile, because the index
-never declared that sort. Neither does `.profile("fuzzy")`.
+`.sort("priceDesc")` does not compile, because the index never declared that
+sort. Neither does `.profile("fuzzy")`.
 
-## The names are the portable contract
+## Sorts
 
-The index owns the vocabulary and the adapter satisfies it. That direction is
-deliberate. If the names came from the adapter configuration instead, dropping a
-sort while swapping providers would break every call site that used it. Declared
-on the index, the same mistake is a type error inside the adapter configuration,
-which is where migration work belongs:
+A sort lists the fields it orders by, in priority order, each with `"asc"` or
+`"desc"`. `cheapestByName` above sorts by price and breaks ties by name. Each
+field has to be a field of the document, so a typo is a compile error.
+
+`"relevance"` always exists. It is the engine's own order and the one a search
+starts with, which is why an index may not define a sort of that name.
+
+The adapter receives the definition, its name and its fields, and writes the
+engine's own sort from it:
+
+| Engine    | `priceAsc` becomes                                    |
+| --------- | ----------------------------------------------------- |
+| Typesense | `sort_by: "price:asc"`, at most three fields          |
+| Algolia   | a search of the replica configured for `priceAsc`     |
+| an engine | whatever its API spells, or a refusal where it cannot |
+
+An engine that cannot express a sort refuses it with `"unsupported-feature"`
+when the search runs, for example Typesense with a fourth field. An in-process
+engine can sort every match before it pages, which is the honest version of the
+same thing. No adapter sorts the page it got back.
+
+### Sorts an engine serves from its own configuration
+
+Algolia has no per request sort. An alternative order is a replica index, so its
+adapter takes one replica per sort:
 
 ```ts
-adapter: typesense({
+replicas: { priceAsc: "products_price_asc" },
+```
+
+That configuration has to cover every sort the index declares. A missing one is
+a compile error where the adapters are bound, and a `ScoutError` when the
+`Scout` is built, never a surprise at a call site. A replica for a sort the
+index never declared is refused the same way, because it is a typo that would
+otherwise do nothing. The exact options are in [adapters](adapters.md).
+
+## Profiles
+
+A profile lists the fields its query text runs against. `"default"` always
+exists and searches the index's `searchable` fields, which is why an index may
+not define a profile of that name. The adapter receives the profile's name and
+its fields, and runs the query against those.
+
+A profile is a name rather than a parameter because the behaviour behind it is
+yours to tune per engine. An adapter can take tuning keyed by profile name:
+
+```ts
+typesense({
   client,
   collection: "products",
-  profiles: { default: { queryBy: ["name"] } },
-  // Missing `priceAsc`, so this object does not satisfy
-  // Record<"relevance" | "priceAsc", TypesenseSort> and the index call fails
-  // to compile here.
-  sorts: { relevance: {} },
+  profiles: { autocomplete: { prefix: true }, default: { prefix: false } },
 });
 ```
 
-The check is a compile time one. It does not survive a JavaScript caller, a name
-built from a string at runtime, or an adapter whose configuration was assembled
-with a wider type. In those cases the adapter is the one that refuses, at search
-time, with `UnsupportedSearchFeatureError` for a sort it cannot translate.
-
-## The first name is the default
-
-`sorts[0]` is the sort a search uses when it does not call `.sort()`, and
-`profiles[0]` is the profile it uses when it does not call `.profile()`. In the
-example above that is `relevance` and `default`. Order the tuples accordingly:
-there is no separate default field to set, and no way to declare a name that is
-never reachable as a default other than putting it second.
-
-## What one name becomes in each engine
-
-The name stays the same across engines. What it maps to does not.
-
-| Engine      | A sort is                                         | A profile is                                                       |
-| ----------- | ------------------------------------------------- | ------------------------------------------------------------------ |
-| Typesense   | `{ sortBy: "price:asc" }`, a `sort_by` string     | `{ queryBy: ["name", "brand"], prefix: true }`                     |
-| Algolia     | `{ index: { name: "products_price_asc" } }`       | `{ searchParams: { typoTolerance: false } }`                       |
-| Meilisearch | `{ sort: ["price:asc"] }`                         | `{ attributesToSearchOn: ["title"] }` and the other search options |
-| Orama       | `{ sortBy: { property: "price", order: "ASC" } }` | `{ properties, boost, tolerance, threshold }`                      |
-| MiniSearch  | `"relevance"`, the only order it has              | `{ fields, boost, prefix, fuzzy, combineWith, bm25 }`              |
-
-Two of those mappings change how the configuration is written rather than how a
-search is written.
-
-Algolia has no per request sort parameter. An alternative order is a replica
-index, so a Scout sort name maps to an index name and the adapter searches that
-index instead:
-
-```ts
-algolia({
-  client,
-  index: { name: "products" },
-  sorts: {
-    relevance: { index: { name: "products" } },
-    priceAsc: { index: { name: "products_price_asc" } },
-  },
-  profiles: { default: {} },
-});
-```
-
-The replica mapping is part of the adapter fingerprint, because the same sort
-name over a different replica is a different result set. See
-[query identity](internals/query-identity.md).
-
-MiniSearch orders by BM25 score and takes no sort option, so every sort name it
-is configured with is an alias for relevance:
-
-```ts
-minisearch({
-  index: catalogue,
-  revision: () => catalogueVersion,
-  profiles: { default: { fields: ["title"], prefix: true } },
-  sorts: { relevance: "relevance", best: "relevance" },
-});
-```
-
-An index may declare `best` and get score order. A sort name the adapter was not
-configured with throws `UnsupportedSearchFeatureError` when the search runs,
-because ordering another way would mean sorting every match on every query.
-Orama refuses an unconfigured sort or profile name the same way.
-
-## Why a profile is a name and not an option
-
-A profile carries the engine knobs that change which documents match or in what
-order: which fields the query text runs against, prefix and fuzzy behaviour,
-boosts, typo tolerance, thresholds. Those are not portable. `queryBy` has no
-Algolia spelling and `typoTolerance` has no MiniSearch spelling, so passing them
-per call would put provider vocabulary in application code and break on the next
-adapter.
-
-Naming them instead keeps the call site portable. `products.profile("autocomplete")`
-means the same thing on every engine: the search behaviour this application
-calls autocomplete. What that behaviour is written as lives in one configuration
-object, next to the client it belongs to.
+The call site stays `products.search(text).profile("autocomplete")` on every
+engine. What autocomplete means on this one lives in one configuration object,
+next to the client it belongs to. Tuning is optional, and tuning for a profile
+the index never declared is refused when the `Scout` is built.
 
 Anything that is genuinely per search, rather than per named behaviour, goes
 through `.provider()` instead, which takes adapter typed options and takes part
-in the query identity. See [native access](native-access.md) for what that
-costs.
+in the query identity. See [native access](native-access.md).
 
-## Building an adapter
+## Both are part of the query identity
 
-Call `createSearchAdapter({ ... })` with no explicit type arguments. The
-adapter's whole type is inferred from the value, which is what keeps the literal
-keys of `sorts` and `profiles`. A `Readonly<Record<string, unknown>>` satisfies a
-record of any literal keys, so an adapter whose declared type erased those names
-would make the coverage requirement above vacuous and every engine would look
-like it supported every sort. That happened once during development and the type
-contract did not catch it, because the mock originally re-attached its declared records
-after construction.
-
-[Writing an adapter](writing-an-adapter.md) has the rest of the contract, and
-[adapters](adapters.md) compares what each engine can do.
+The key holds the sort's definition, not only its name, and the profile's name
+together with its fields. Two searches that ask for the same name over a
+declaration that changed do not share a cache entry. See
+[query identity](internals/query-identity.md).

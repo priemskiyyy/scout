@@ -1,12 +1,12 @@
 ---
-description: "Declare a typed index over a Typesense collection, run one search end to end, read a result that says how certain it is, then hand the fetching to TanStack Query."
+description: "Declare a typed index, bind a Typesense adapter to it, run one search end to end, read a result that says how certain it is, then hand the fetching to TanStack Query."
 ---
 
 # Getting started
 
 This page runs one search against a real remote engine, Typesense, and then
 puts it behind TanStack Query. Every other adapter is wired the same way: the
-index declaration does not change, only the adapter configuration does.
+index declaration does not change, only the adapter bound to it does.
 
 ```sh
 pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense typesense zod
@@ -35,53 +35,59 @@ export const Product = z.object({
 ## Declare the index
 
 ```ts
-// search/scout.ts
-import { Scout, index } from "@priemskiyyy/scout";
-import { typesense } from "@priemskiyyy/scout-typesense";
-import { Client } from "typesense";
+// search/products.ts
+import { index } from "@priemskiyyy/scout";
 import { Product } from "./Product";
 
-const client = new Client({
+export const products = index({
+  schema: Product,
+  id: (product) => product.id,
+  searchable: ["name", "brand"],
+  filterable: ["brand", "price", "inStock", "tags"],
+  facetable: { brand: "string" },
+  highlightable: ["name"],
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { autocomplete: { searchable: ["name"] } },
+});
+```
+
+Each part shows up later as a compile error rather than a runtime surprise:
+
+- `searchable` is what the query text runs against. Only text fields qualify.
+- `filterable`, `facetable` and `highlightable` are the fields a search may
+  filter, facet and highlight. A field outside them does not exist on the
+  builder. `facetable` also says what type each facet value is.
+- `sorts` and `profiles` are named behaviours your application asks for. Every
+  index also has `"relevance"`, the engine's own order, and `"default"`, which
+  searches `searchable`. See [profiles and sorts](profiles-and-sorts.md).
+- `id` is stable identity for a document. It is never a hit's position.
+- `schema` is what turns the engine's `unknown` into a `Product`.
+
+The declaration names no engine, and declaring it opens nothing.
+
+## Bind an engine to it
+
+```ts
+// search/scout.ts
+import { Scout } from "@priemskiyyy/scout";
+import { typesense } from "@priemskiyyy/scout-typesense";
+import { SearchClient } from "typesense";
+import { products } from "./products";
+
+const client = new SearchClient({
   nodes: [{ host: "search.example.com", port: 443, protocol: "https" }],
   apiKey: SEARCH_ONLY_API_KEY,
 });
 
 export const scout = new Scout({
-  indexes: {
-    products: index({
-      schema: Product,
-      id: (product) => product.id,
-      filterable: ["brand", "price", "inStock", "tags"],
-      facetable: ["brand"],
-      highlightable: ["name"],
-      sorts: ["relevance", "priceAsc"],
-      profiles: ["default", "autocomplete"],
-      adapter: typesense({
-        client,
-        collection: "products",
-        profiles: {
-          default: { queryBy: ["name", "brand"], prefix: true },
-          autocomplete: { queryBy: ["name"], prefix: true },
-        },
-        sorts: { relevance: {}, priceAsc: { sortBy: "price:asc" } },
-      }),
-    }),
-  },
+  indexes: { products },
+  adapters: { products: typesense({ client, collection: "products" }) },
 });
 ```
 
-Four things are being declared at once, and each of them shows up later as a
-compile error rather than a runtime surprise:
-
-- `filterable`, `facetable` and `highlightable` are the fields a search may
-  filter, facet and highlight. A field outside those lists does not exist on the
-  builder.
-- `sorts` and `profiles` are names your application uses. The adapter
-  configuration is required to cover every one of them, so dropping `priceAsc`
-  while swapping a provider fails in this file and never at a call site. See
-  [profiles and sorts](profiles-and-sorts.md).
-- `id` is stable identity for a document. It is never a hit's position.
-- `schema` is what turns the provider's `unknown` into a `Product`.
+Every index needs an adapter under the same name, and every adapter needs an
+index. A missing or extra one is a compile error, and a `ScoutError` when the
+`Scout` is built, so the mistake never waits for a search.
 
 Creating a `Scout` opens nothing and sends nothing. It holds no results and no
 cache. One instance per application, and one per security context: see
@@ -106,7 +112,7 @@ const result = await products
   .sort("priceAsc")
   .facets("brand")
   .highlight("name")
-  .pageSize(20)
+  .page({ size: 20 })
   .execute();
 ```
 
@@ -135,12 +141,17 @@ whatever `id()` returned, so it is stable across pages and refetches.
 The total is the part most wrappers throw away:
 
 ```ts
-const label =
-  result.total.accuracy === "unknown"
-    ? "Many results"
-    : result.total.accuracy === "exact"
-      ? `${result.total.value} results`
-      : `About ${result.total.value} results`;
+const getLabel = (total: SearchTotal) => {
+  if (total.accuracy === "unknown") {
+    return "Many results";
+  }
+
+  if (total.accuracy === "exact") {
+    return `${total.value} results`;
+  }
+
+  return `About ${total.value} results`;
+};
 ```
 
 The `"unknown"` branch carries no `value` at all, so the compiler makes you
@@ -182,18 +193,18 @@ export const useProductSearch = (text: string) =>
   useQuery({
     ...queryOptions(products.search(text).facets("brand").highlight("name")),
     staleTime: 30_000,
-    enabled: text.length > 0,
   });
 ```
 
 The query key is `search.key()`, the canonical identity of that search, so two
 searches that mean the same thing share a cache entry and two that differ in
 anything that changes results do not. The `signal` TanStack supplies reaches
-`execute({ signal })`, so an unmounted component cancels the request on the
-adapters that can be cancelled.
+`execute({ signal })`, so an unmounted component stops waiting at once, and the
+adapters whose SDK can cancel a request cancel it.
 
-`enabled` matters here: an index rejects an empty query by default, so a search
-with no text throws rather than quietly matching everything.
+An empty query is not an error. It browses: every document the filter allows,
+in the requested order. Pass `enabled: text.length > 0` only if your screen
+should show nothing before the first keystroke.
 
 For a list that grows:
 
@@ -220,22 +231,23 @@ and what happens when an engine will not say whether a next page exists.
 
 ## When the engine cannot do it
 
-An adapter declares what it actually implements. A portable request it cannot
-translate throws before anything is sent:
+An adapter refuses what its engine cannot express, and says so before it sends
+anything:
 
 ```ts
-// UnsupportedSearchFeatureError: the minisearch adapter does not report facets.
+// ScoutError { code: "unsupported-feature" }: MiniSearch reports no facets.
 await minisearchBacked.search("boot").facets("category").execute();
 ```
 
 It is never dropped, and it is never emulated over the one page that came back,
 because a silently narrower search returns results that look right and are not.
-[Adapters](adapters.md) has the per engine table, and
-[troubleshooting](troubleshooting.md) lists what each error means.
+[Adapters](adapters.md) says what each engine refuses, and
+[troubleshooting](troubleshooting.md) lists what each error code means.
 
 ## Next
 
-- [Indexes](indexes.md) for schema, id, field declarations and validation modes.
+- [Indexes](indexes.md) for the schema, the id, the field declarations and
+  validation.
 - [Filters](filters.md) for the operators per field type and the empty set rules.
 - [Adapters](adapters.md) to pick an engine, or to see what changes if you swap.
 - [Security](security.md) before you ship a search key to a browser.

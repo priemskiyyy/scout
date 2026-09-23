@@ -51,8 +51,7 @@ indexed.
 
 `path` is where the highlighted value sits inside the document. A plain field is
 `["name"]`. An array field gives one fragment per matching element with its
-index, so `["tags", 2]` is the third tag. A nested object field reports each key
-it walked through.
+index, so `["tags", 2]` is the third tag.
 
 That is why `highlights.name` is an array rather than a single fragment: one
 requested field can highlight several values.
@@ -64,7 +63,7 @@ result.hits[0]?.highlights.name; // [] when the engine highlighted nothing
 ```
 
 The core fills an empty array for every field the search requested, so rendering
-never checks for `undefined`. An empty array means the provider matched nothing
+never checks for `undefined`. An empty array means the engine matched nothing
 in that field, which is the truth rather than a gap.
 
 ## `truncated` says whether the value was cut
@@ -73,11 +72,9 @@ in that field, which is the truth rather than a gap.
 - `true`: the engine cut it short.
 - `"unknown"`: the engine did not say.
 
-| Adapter     | What it reports                                                                                                                          |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| Typesense   | `false` for a whole field value, `"unknown"` for a snippet window or an array element, because Typesense never says how much it left out |
-| Algolia     | `false`, because the adapter reads `_highlightResult`, which carries the whole attribute, and never requests `_snippetResult`            |
-| Meilisearch | `false` when nothing was cropped, `"unknown"` when the search asked for cropping, because Meilisearch does not report whether it cropped |
+Typesense reports `false` for a whole field value and `"unknown"` for a snippet
+window or an array element, because it never says how much it left out.
+[Adapters](adapters.md) says what the others report.
 
 Treat `"unknown"` as "do not append an ellipsis and do not claim this is the
 full value".
@@ -85,71 +82,58 @@ full value".
 ## A document cannot forge a match
 
 An engine marks a match by wrapping it in tags, so the adapter has to tell a tag
-it asked for apart from text that was indexed. Each adapter solves that, and not
-in the same way.
+it asked for apart from text that was indexed. A fixed tag such as `<mark>` or
+`<em>` cannot do that: a document indexed with the tag in it would produce a
+match the engine never found.
 
-Algolia and Meilisearch generate an unguessable marker per search and pass it as
-the pre and post tag, instead of Algolia's default `<em>`. Algolia inserts the
-tags verbatim and escapes nothing, so a document indexed with `<em>` in it would
-otherwise produce a match that was never found, and so would a document indexed
-with a fixed marker. A marker chosen after the document was written cannot be
-forged by that document.
-
-Typesense sets `highlight_start_tag` and `highlight_end_tag` to `<mark>` and
-`</mark>`, then checks the parsed parts for a marker that leaked through. A hit
-whose text contains those tags does not produce a fabricated match; the fragment
-degrades to one unmatched part carrying the plain text with the markers removed.
-That is a weaker guarantee than an unguessable marker: the match positions in
-such a document are lost rather than wrong.
+So an adapter asks for markers made for that one search, with
+`createHighlightMarkers()` from `@priemskiyyy/scout/adapter`, and splits the
+engine's answer on them with `splitHighlight()`. A marker chosen after the
+document was written cannot be forged by that document. The markers are ASCII,
+built around `crypto.randomUUID()` where it exists and two random draws on a
+runtime without it, such as an older Hermes build.
 
 Malformed metadata degrades the same way everywhere. An opening marker with no
-closing one, a closing marker with no opening one, or a value that does not read
-as balanced markers becomes a single unmatched part carrying the plain text. No
-adapter throws over a highlight, because a broken highlight is not a reason to
-fail a search that otherwise answered.
+closing one, a closing marker with no opening one, or a pair nested inside
+another becomes a single unmatched part carrying the plain text with the
+markers removed. No adapter throws over a highlight, because a broken highlight
+is not a reason to fail a search that otherwise answered.
+
+The conformance suite holds every adapter to the invariant that matters:
+rejoining a whole fragment's parts gives back exactly the field, which catches
+a leaked marker and a corrupted slice at once.
 
 ## The Unicode problem
 
-Meilisearch can report match positions two ways, and one of them is a trap.
-`_matchesPosition` gives `start` and `length` as UTF-8 byte offsets. JavaScript
-string indexes are UTF-16 code units, so those numbers are not interchangeable:
+Some engines report match positions as UTF-8 byte offsets. JavaScript string
+indexes are UTF-16 code units, so those numbers are not interchangeable:
 slicing a string by them corrupts any accented, CJK or emoji text, and the
 corruption only appears for the documents that contain such text.
 
-The adapter does not request `_matchesPosition`. It sets its own
-`highlightPreTag` and `highlightPostTag` and splits the formatted value on those
-markers, which is plain string slicing at positions the engine itself produced
-and cannot cut a character in half.
-
-Typesense parses markers the same way and for the same reason. Both markers are
-ASCII, so a marker can never be found inside a surrogate pair, and an astral
-character, a combining mark or a joined emoji sequence cannot be split at one of
-those boundaries.
+That is the other reason adapters split on markers. Splitting is plain string
+slicing at positions the engine itself produced, and an ASCII marker can never
+be found inside a surrogate pair, so an astral character, a combining mark or a
+joined emoji sequence cannot be cut at one of those boundaries.
 
 If you write an adapter, prefer markers over offset arithmetic. If an engine
 gives you nothing but offsets, find out which encoding they count in before
 slicing anything.
 
-## Two engines have no highlights at all
-
-Orama and MiniSearch both declare `highlights: "none"`:
+## An engine without highlights refuses them
 
 ```ts
 await localProducts.search("boot").highlight("name").execute();
-// UnsupportedSearchFeatureError: The orama adapter does not report highlights.
+// ScoutError { code: "unsupported-feature" }
 ```
 
-Orama's keyword search reports no match offsets. MiniSearch's `match` says which
-fields a term was found in and never where in the text, and the tokenizer and
-term processor that would be needed to find the position again belong to the
-instance and are not exposed. Parts built from either would be guesses, so the
-search is refused instead. Every hit from those adapters carries an empty
-highlight record, and asking for one throws before the search runs.
+An engine that reports no match positions has no honest parts to give, so its
+adapter refuses a search that asks for highlights, before anything runs.
+Parts built without positions would be guesses. [Adapters](adapters.md) says
+which engines refuse.
 
 If you need highlighting over a local corpus, highlight in the application from
 the query you already have, and treat it as your own approximation rather than
 something the engine reported.
 
-[Adapters](adapters.md) compares the engines, and
-[the search builder](search-builder.md) shows where `.highlight()` sits in a
+[The search builder](search-builder.md) shows where `.highlight()` sits in a
 chain.

@@ -15,7 +15,6 @@ import { queryOptions } from "@priemskiyyy/scout-tanstack-query";
 const { data } = useQuery({
   ...queryOptions(products.search(text).facets("brand").highlight("name")),
   staleTime: 30_000,
-  enabled: text.length > 0,
 });
 
 const names = data?.hits.map((hit) => hit.document.name) ?? [];
@@ -42,11 +41,10 @@ same thing share a cache entry and two that differ in anything that changes
 results do not. [Query identity](internals/query-identity.md) lists what is in
 it and what is deliberately not.
 
-The `signal` TanStack supplies is passed into `execute`, which is what makes an
-unmounted component or a superseded keystroke cancel the request rather than
-only drop its answer. On an adapter with `cancellation: "logical"`, Algolia,
-Orama and MiniSearch, it stops Scout waiting and the engine still finishes the
-work.
+The `signal` TanStack supplies is passed into `execute`, so an unmounted
+component or a superseded keystroke settles the query at once, and an adapter
+whose SDK can cancel a request cancels it. One that cannot lets the engine
+finish the work while Scout has already stopped waiting.
 
 Because the object is plain, it goes anywhere options go:
 
@@ -101,25 +99,21 @@ you invalidate.
 uncertainty rather than inventing a page count, and this package makes the
 choice and states it:
 
-| `page.next` | What the infinite query does                                          |
-| ----------- | --------------------------------------------------------------------- |
-| a number    | believed and used                                                     |
-| `null`      | the list ends                                                         |
-| `"unknown"` | advance to `page.current + 1` only while the last page came back full |
+| `page.next` | What the infinite query does  |
+| ----------- | ----------------------------- |
+| a number    | believed and used             |
+| `null`      | the list ends                 |
+| `"unknown"` | advance to `page.current + 1` |
 
-"Full" means `hits.length === page.size`. A page that came back short cannot be
-followed by another one, so stopping there is safe. Invalid documents skipped
-by validation still count toward a full provider page. A page that came back full
-might still be the last page, in which case this costs exactly one request that
-returns nothing and then ends the list.
+The core says `"unknown"` only for a page the engine filled, counting documents
+validation dropped, and a short page is always `null`. A full page is the one
+sign there may be more, so the list asks. If the real last page happens to be
+exactly full, this costs one request that returns nothing, and then the list
+ends.
 
 That wasted request is the price of never silently truncating results. Treating
 `"unknown"` as "no more pages" would drop real results on an engine that simply
-declined to count; treating it as "always another page" would end every list on
-an empty request instead of some of them.
-
-Which engines produce `"unknown"` is in [pagination](pagination.md). Orama and
-MiniSearch never do.
+declined to count. [Pagination](pagination.md) has the rules behind `next`.
 
 ## `flattenHits`
 
@@ -154,9 +148,9 @@ means every remount and every window focus refetches, far more often than a
 search index usually changes. Something above zero is almost always right for
 search, and the value is still yours.
 
-Retries are worth a thought too. A `ScoutError` with code
-`"unsupported-feature"` or `"configuration"` will never succeed on a retry,
-because it was refused before anything was sent:
+Retries are worth a thought too. Only a `ScoutError` with code `"provider"` is
+worth retrying: a refusal or a rejected document gets the same answer every
+time, and an aborted or disposed search was stopped on purpose.
 
 ```ts
 import { ScoutError } from "@priemskiyyy/scout";
@@ -167,6 +161,7 @@ useQuery({
     if (error instanceof ScoutError && error.code !== "provider") {
       return false;
     }
+
     return failureCount < 3;
   },
 });
@@ -179,10 +174,14 @@ That is deliberate: TanStack Query only enters its error state when the query
 function rejects, so a returned error union would be cached as a successful
 result and then rethrown anyway.
 
-What that means in practice is that a refusal Scout makes before dispatch, such
-as a facet on MiniSearch or a page size above the adapter's limit, arrives in
-`query.error` exactly like a provider failure does, and
-[troubleshooting](troubleshooting.md) says which is which.
+What that means in practice is that a refusal, such as a facet on an engine
+that has none or a page size above the engine's limit, arrives in `query.error`
+exactly like a provider failure does, and [troubleshooting](troubleshooting.md)
+says which is which.
+
+`queryOptions` calls `search.key()` as it builds the options, so a mistake only
+the runtime can see, such as a sort name read from a URL, throws there rather
+than in the query function.
 
 ## One cache per security context
 

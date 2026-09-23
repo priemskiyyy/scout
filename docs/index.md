@@ -1,15 +1,16 @@
 ---
 title: Scout
 titleTemplate: Typed, provider-independent search for TypeScript
-description: "One typed search that runs against Typesense, Algolia, Meilisearch, Orama or MiniSearch, with honest totals, safe highlights, deterministic query identity and TanStack Query left in charge of caching."
+description: "One typed search that runs against Typesense, Algolia, Meilisearch, MongoDB Search, Elasticsearch, OpenSearch, Orama, MiniSearch or Fuse.js, with honest totals, safe highlights, deterministic query identity and TanStack Query left in charge of caching."
 ---
 
 # Scout
 
-Write one typed search and run it against Typesense, Algolia, Meilisearch, Orama
-or MiniSearch. Scout normalizes the part of application search that is genuinely
-portable: typed indexes, a typed filter builder, named search and sort profiles,
-pagination, facets, safe highlights and deterministic query identity.
+Write one typed search and run it against Typesense, Algolia, Meilisearch,
+MongoDB Search, Elasticsearch, OpenSearch, Orama, MiniSearch or Fuse.js. Scout normalizes the part of application search
+that is genuinely portable: typed indexes, a typed filter builder, named sorts
+and profiles, pagination, facets, safe highlights and deterministic query
+identity.
 
 [Get started](getting-started.md) · [Choose an adapter](adapters.md) ·
 [TanStack Query](tanstack-query.md) ·
@@ -34,7 +35,7 @@ const result = await scout
   )
   .sort("priceAsc")
   .facets("brand")
-  .pageSize(20)
+  .page({ size: 20 })
   .execute();
 ```
 
@@ -44,6 +45,28 @@ exist, because `between` on a string has no portable meaning across these
 engines. `.sort("priceDesc")` does not exist, because the index never declared
 it.
 
+## One index, any engine
+
+```ts
+const products = index({
+  schema: Product,
+  id: (product) => product.id,
+  searchable: ["name", "brand"],
+  filterable: ["brand", "price", "inStock"],
+  facetable: { brand: "string" },
+  sorts: { priceAsc: { price: "asc" } },
+});
+
+const scout = new Scout({
+  indexes: { products },
+  adapters: { products: typesense({ client, collection: "products" }) },
+});
+```
+
+The index names no engine. It declares what a document is, which fields a
+search may use, and what each sort orders by. The adapter is bound next to it,
+so swapping engines changes one line and no call site.
+
 ## It keeps the uncertainty the engine reported
 
 ```ts
@@ -51,31 +74,23 @@ result.total; // { value: 1249, accuracy: "estimated", scope: "matches" }
 ```
 
 A total is `exact`, `estimated`, a `lower-bound` or `unknown`, and each one maps
-to something the engine actually said: Algolia's `exhaustive.nbHits`,
-Typesense's `search_cutoff`, Meilisearch counting exhaustively in page mode and
-estimating in offset mode. The `unknown` branch carries no number at all, so the
-compiler makes you handle it. Scout never fabricates a count or a page total.
-[Pagination](pagination.md) has the whole model.
+to something the engine actually said, such as Typesense's `search_cutoff`. The
+`unknown` branch carries no number at all, so the compiler makes you handle it.
+Scout never fabricates a count or a page total. [Pagination](pagination.md) has
+the whole model.
 
 ## It refuses instead of degrading
 
-An engine that cannot express what you asked for throws before anything is sent:
+An engine that cannot express what you asked for refuses before anything is
+sent:
 
 ```ts
-// UnsupportedSearchFeatureError: the minisearch adapter does not report facets.
+// ScoutError { code: "unsupported-feature" }: MiniSearch reports no facets.
 ```
 
-No adapter is allowed to filter or sort the page it got back to fake a feature
-it does not have, because that produces results that look right and are not.
-[Adapters](adapters.md) lists what each engine declares.
-
-## Swapping engines is a compile error, not a surprise
-
-An index declares its own sort and profile names, and the adapter configuration
-is required to cover every one of them. Change provider and forget a sort, and
-the error lands in the adapter configuration where the migration work belongs,
-never at a call site. [Profiles and sorts](profiles-and-sorts.md) explains the
-mechanism.
+No adapter filters or sorts the page it got back to fake a feature it does not
+have, because that produces results that look right and are not.
+[Adapters](adapters.md) says what each engine refuses.
 
 ## TanStack Query keeps its job
 

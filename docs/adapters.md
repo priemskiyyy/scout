@@ -1,54 +1,58 @@
 ---
-description: "Compare the Scout adapters across filters, facets, highlights, page limits and cancellation, and see how each engine is configured and what it refuses."
+description: "Compare the Scout adapters by what each engine refuses, and see how each one is configured."
 ---
 
 # Adapters
 
 An adapter maps one engine onto the portable contract and nothing more. It owns
-translation, escaping, page numbering, accuracy mapping, facet coercion and
-highlight construction. It owns no cache, no retries and no page accumulation.
+translation, escaping, page numbering and the honesty of totals, facets and
+highlights. It owns no cache, no retries and no page accumulation, and the core
+owns cancellation, disposal, page derivation and facet decoding for all of them.
+
+The index declaration does not change from one engine to the next. Only the
+adapter bound to it does:
 
 ```ts
-// The index declaration does not change. The adapter configuration does.
-adapter: typesense({ client, collection: "products", profiles, sorts });
-adapter: algolia({ client, index: { name: "products" }, profiles, sorts });
-adapter: meilisearch({ index: client.index("products"), profiles, sorts });
+const scout = new Scout({
+  indexes: { products },
+  adapters: {
+    products: typesense({ client, collection: "products" }),
+  },
+});
 ```
 
-Each adapter declares what it actually implements, not what the vendor
-advertises. A portable request a capability denies throws
-`UnsupportedSearchFeatureError` before anything is sent. It is never dropped and
-never emulated over the one page that came back, because a silently narrower
-search returns results that look right and are not.
+What an engine cannot express, its adapter refuses with a `ScoutError` whose
+`code` is `"unsupported-feature"`, before anything is sent. It is never dropped
+and never emulated over the one page that came back, because a silently
+narrower search returns results that look right and are not.
 
-## Capabilities by adapter
+## What each adapter refuses
 
-Every value below comes from the adapter's own `capabilities` object and its
-source, not from vendor documentation.
+Every value below comes from the adapter's source, not from vendor
+documentation.
 
-| Adapter     | Filters                              | Boolean composition                            | Facets                   | Highlights                  | Max page size                | Cancellation |
-| ----------- | ------------------------------------ | ---------------------------------------------- | ------------------------ | --------------------------- | ---------------------------- | ------------ |
-| Typesense   | All nine                             | Yes                                            | Result scoped            | Parts                       | 250                          | Transport    |
-| Algolia     | All nine                             | AND clauses with OR groups; restrictions below | Result scoped            | Parts                       | 1000                         | Logical      |
-| Meilisearch | All nine                             | Yes                                            | Result scoped            | Parts                       | `maxTotalHits`, default 1000 | Transport    |
-| Orama       | All nine on supported property kinds | Yes                                            | Supported property kinds | None                        | None                         | Logical      |
-| MiniSearch  | All nine                             | Yes                                            | None                     | None                        | None                         | Logical      |
-| Fuse.js     | All nine                             | Yes                                            | None                     | Parts with `includeMatches` | None                         | Logical      |
-| HTTP        | Declared by your backend             | Declared by your backend                       | Declared by your backend | Your mapping                | Declared by your backend     | Transport    |
+| Adapter        | Filters                             | Sorts                          | Facets                            | Highlights            | Largest page                        | Cancels on the wire |
+| -------------- | ----------------------------------- | ------------------------------ | --------------------------------- | --------------------- | ----------------------------------- | ------------------- |
+| Typesense      | All nine                            | Up to three fields             | Yes                               | Yes                   | 250                                 | Yes                 |
+| Algolia        | AND clauses of OR groups, see below | Through replicas               | Yes                               | Yes                   | 1000                                | No                  |
+| Meilisearch    | All nine                            | Yes                            | Yes                               | Yes                   | `maxTotalHits`, default 1000        | Yes                 |
+| MongoDB Search | All nine, strings on `token` fields | Yes, strings on `token` fields | Strings on `token` fields         | Yes                   | No limit                            | Yes                 |
+| Elasticsearch  | All nine                            | On exact fields                | On exact fields                   | Yes                   | `max_result_window`, default 10,000 | Yes                 |
+| OpenSearch     | All nine                            | On exact fields                | On exact fields                   | Yes                   | `max_result_window`, default 10,000 | Yes                 |
+| Orama          | On `number`, `enum` and `boolean`   | One field                      | On `string`, `enum` and `boolean` | Refused               | No limit                            | No                  |
+| MiniSearch     | All nine, over stored fields        | Any, in process                | Refused                           | Refused               | No limit                            | No                  |
+| Fuse.js        | All nine                            | Any, in process                | Refused                           | With `includeMatches` | No limit                            | No                  |
+| HTTP           | What your backend accepts           | What your backend accepts      | What your backend accepts         | Your mapping          | What your backend accepts           | Yes                 |
 
-Typesense, Algolia and Meilisearch use remote engines. Orama, MiniSearch and
-Fuse.js run in process. HTTP wraps your own endpoint. Each adapter exposes the
-injected engine through `native`.
+The nine filter operators are `eq`, `neq`, `in`, `notIn`, `gt`, `gte`, `lt`,
+`lte` and `between`. Typesense, Algolia, Meilisearch, MongoDB Search,
+Elasticsearch and OpenSearch are remote engines.
+Orama, MiniSearch and Fuse.js run in process. HTTP wraps your own endpoint.
+Each adapter hands the injected client back through `native`.
 
-`transport` cancellation means the provider request itself is cancelled.
-`logical` means aborting stops Scout waiting and refuses the late answer while
-the engine may still be computing and, on a hosted engine, still billing. All
-nine filter operators are `eq`, `neq`, `in`, `notIn`, `gt`, `gte`, `lt`, `lte`
-and `between`.
-
-No adapter declares `facets.excludeOwnFilter` or `facets.searchValues`, because
-none of them uses a multi-search endpoint. [Facets](facets.md) explains what
-that means for a facet count.
+An aborted search always settles the caller at once, whatever the engine does.
+"Cancels on the wire" says whether the request itself stops. Where it does not,
+the engine may still be computing and, on a hosted engine, still billing.
 
 ## Typesense
 
@@ -57,35 +61,21 @@ pnpm add @priemskiyyy/scout-typesense typesense
 ```
 
 ```ts
-adapter: typesense({
+typesense({
   client,
   collection: "products",
-  profiles: { default: { queryBy: ["name", "brand"], prefix: true } },
-  sorts: { relevance: {}, priceAsc: { sortBy: "price:asc" } },
-  facets: { price: "number", inStock: "boolean" },
+  profiles: { exact: { prefix: false } },
 });
 ```
 
-The filter tree becomes one `filter_by` string. Equality is exact `:=` and never
-the token matching `:`, so a filter on `red` cannot also return `dark red`.
-String values are backtick quoted with a backtick or a backslash inside escaped,
-groups are parenthesised, and a negation is pushed down to the fields because
-Typesense negates a field and never a group.
-
-Pages are one-based like Scout's, so nothing is shifted, and `per_page` is
-capped at 250. `found` is exact, or `estimated` when `search_cutoff` says the
-engine stopped counting early, in which case the next page cannot be ruled out
-and `page.next` is `"unknown"`. `facet_counts[].sampled` becomes the facet's
-exhaustiveness. `search_time_ms` is reported as the engine's own `took`.
-
-`facets` is how a facet value gets its type: Typesense reports every facet value
-as a string, even for a numeric field, and only you know what the field really
-is. A field left out stays the string Typesense sent.
-
-It refuses a grouped search, because `group_by` answers with `grouped_hits`
-instead of `hits` and that is a different result shape than this contract maps.
-It refuses a filter value that is not a string, a number or a boolean, and a
-range comparison against a string.
+The filter becomes one `filter_by` string. Equality is exact `:=` and never the
+token matching `:`, so a filter on `red` cannot also return `dark red`. Groups
+are parenthesised and a negation is pushed down to the fields, because Typesense
+negates a field and never a group. A sort becomes `sort_by`, an empty query is
+sent as `*`, and `found` is exact unless `search_cutoff` says the engine
+stopped counting early. Typesense reports every facet value as a string, and
+Scout reads it back as the type the index declared. A grouped search is
+refused, because it answers with a result shape Scout does not map.
 
 ## Algolia
 
@@ -94,56 +84,35 @@ pnpm add @priemskiyyy/scout-algolia algoliasearch
 ```
 
 ```ts
-adapter: algolia({
-  client,
-  index: { name: "products" },
-  sorts: {
-    relevance: { index: { name: "products" } },
-    priceAsc: { index: { name: "products_price_asc" } },
-  },
-  profiles: { default: {}, strict: { searchParams: { typoTolerance: false } } },
-  paginationLimitedTo: 1000,
+algolia({
+  client: algoliasearch(appId, searchOnlyApiKey),
+  indexName: "products",
+  replicas: { priceAsc: "products_price_asc" },
+  profiles: { titles: { typoTolerance: false } },
 });
 ```
 
-**Aborting does not cancel.** Version 5 of the Algolia client has no
-`AbortSignal` anywhere, so this adapter declares `cancellation: "logical"`:
-aborting stops Scout waiting and refuses the late answer, and Algolia keeps
-computing the query and still bills for it. Debounce search as you type when
-that matters. See [recipes](recipes.md).
+**A sort is a replica index.** Algolia has no per search sort, so every sort
+the index declares needs a replica under `replicas`. A missing one is a compile
+error, and a construction error for a JavaScript caller.
 
-**The client's own caches are bypassed by default.** `createTransporter` takes a
-`requestsCache` and a `responsesCache`, and `searchSingleIndex` marks every
-search `cacheable: true`, which the transporter reads as
-`requestOptions.cacheable || request.cacheable`. A per request opt out is
-therefore impossible, and a cached response would answer a TanStack Query
-invalidation without ever reaching Algolia. The adapter calls
-`searchSingleIndexWithHTTPInfo` instead, which is the only search call that
-consults neither cache. Pass `cache: true` to use `searchSingleIndex` and let
-the client's caches answer.
+**Aborting does not cancel.** Version 5 of the Algolia client takes no
+`AbortSignal`, so Algolia keeps computing an aborted query and still bills for
+it. Debounce search as you type when that matters. See [recipes](recipes.md).
 
-**A sort is a replica index.** Algolia has no per request sort parameter, so
-every declared sort name maps to an index name, and that mapping is part of the
-adapter fingerprint: the same sort name over a different replica is a different
-result set.
+**The client's own caches are bypassed by default,** because a cached response
+would answer a TanStack Query invalidation without reaching Algolia. Pass
+`cache: true` to let them answer.
 
-Pages are zero-based and come back translated, `hitsPerPage` is capped at 1000,
-and `paginationLimitedTo` is an index setting rather than a response field, so
-the adapter takes it as configuration and assumes Algolia's default of 1000.
-Matches past that window exist but cannot be paged to, so `page.next` is capped
-at the last reachable page. Accuracy follows `exhaustive.nbHits`: `true` is
-`"exact"`, `false` is `"estimated"`, and a missing flag is `"unknown"`.
+Pages are zero based and come back translated. `paginationLimitedTo` is an
+index setting rather than a response field, so the adapter takes it as
+configuration, 1000 unless you changed it: the pages end at that window, while
+the total still counts every match. Accuracy follows `exhaustive.nbHits`.
 
-The filter tree becomes one `filters` string, with numeric comparisons written
-inside it rather than sent as `numericFilters`, so one parameter carries the
-whole expression. A comparison or a range against a non numeric value throws
-rather than being sent and misread.
-
-Algolia only accepts AND clauses containing OR groups. An AND inside an OR, a
-negated group or range, or an OR mixing numeric, facet and tag filters throws
-`UnsupportedSearchFeatureError` before dispatch. See the
+Algolia only accepts AND clauses of OR groups. An AND inside an OR, a negated
+group or range, or an OR mixing numeric, facet and tag filters is refused. See
+the
 [Algolia boolean grammar](https://www.algolia.com/doc/guides/managing-results/refine-results/filtering/in-depth/combining-boolean-operators).
-Profiles cannot set parameters owned by Scout, including filters and pagination.
 
 ## Meilisearch
 
@@ -152,41 +121,112 @@ pnpm add @priemskiyyy/scout-meilisearch meilisearch
 ```
 
 ```ts
-adapter: meilisearch({
+meilisearch({
   index: client.index("products"),
-  profiles: { default: {}, titles: { attributesToSearchOn: ["title"] } },
-  sorts: { relevance: {}, priceAsc: { sort: ["price:asc"] } },
+  profiles: { titles: { matchingStrategy: "all" } },
   pagination: "page",
   maxTotalHits: 1000,
 });
 ```
 
-Meilisearch answers a search two ways and the two disagree about how sure they
-are, so the adapter keeps them apart:
+Meilisearch answers a search two ways, and the two disagree about how sure they
+are:
 
-- `pagination: "page"`, the default, sends `page` and `hitsPerPage` and reads
-  `totalHits`, which is counted exhaustively up to the index's
-  `pagination.maxTotalHits`. Below the cap the total is `"exact"` with scope
-  `"matches"`; at the cap it is `"lower-bound"` with scope `"retrievable"`,
-  because that is how many documents pagination can reach rather than how many
-  matched.
-- `pagination: "offset"` sends `offset` and `limit` and reads
-  `estimatedTotalHits`, which is an estimate by design, so the total is
-  `"estimated"` however small the number is.
+- `pagination: "page"`, the default, reads `totalHits`, counted exhaustively up
+  to the index's `pagination.maxTotalHits`. Below the cap the total is
+  `"exact"`; at the cap it is a `"lower-bound"` of what paging can reach.
+- `pagination: "offset"` reads `estimatedTotalHits`, which is `"estimated"`
+  however small it is.
 
-Tell the adapter what your index's `maxTotalHits` is set to. It is also the
-largest page the engine can fill, which is what `pagination.maxPageSize`
-declares.
+Tell the adapter your index's `maxTotalHits`. It is also the largest page the
+engine can fill. Highlights come from markers made for each search rather than
+from `_matchesPosition`, whose offsets count UTF-8 bytes and not JavaScript
+string indexes. A facet's `exhaustive` is `"unknown"`, because Meilisearch never
+says whether it cut a distribution short.
 
-Highlights are built from markers the adapter generates per search rather than
-from `_matchesPosition`, whose `start` and `length` are UTF-8 byte offsets and
-not JavaScript string indexes. See [highlights](highlights.md).
+## MongoDB Search
 
-The SDK's third argument is `Omit<RequestInit, "body" | "method">`, so the
-signal survives and the request is really cancelled. Facets come from
-`facetDistribution` with `facetStats` kept on the facet's `native`, and
-`exhaustive` is `"unknown"` because Meilisearch never says whether a
-distribution was cut short.
+```sh
+pnpm add @priemskiyyy/scout-mongodb mongodb
+```
+
+```ts
+mongodb({
+  collection: client.db("shop").collection("products"),
+  index: "products",
+  tokens: ["brand", "category"],
+});
+```
+
+A search becomes one aggregation pipeline: `$search` holding one `compound`,
+then `$skip` and `$limit`. The driver runs only on a server, so put it behind
+your own endpoint for a browser.
+
+**A string compares only on a `token` field.** MongoDB Search's `equals`, `in`,
+facets and sorts read a string only on a field its index maps as `token`, so
+list those fields in `tokens`. A string filter or facet on any other field is
+refused, and so are number and boolean facets. A sort cannot be checked the
+same way, because the adapter cannot tell a string field from a number, and a
+sort by a string field that is not a `token` comes back in an arbitrary order
+without an error. Map every string field a sort reads as `token`.
+
+There is no operator for every document, so a browse matches every document
+holding one of the searched fields. The default count is exact up to 1000,
+and above it MongoDB answers 1001, which Scout reports as a lower bound;
+`exactTotals: true` counts every match. Facets are never known to be
+exhaustive, and highlights arrive as passages already split into parts.
+
+## Elasticsearch
+
+```sh
+pnpm add @priemskiyyy/scout-elasticsearch @elastic/elasticsearch
+```
+
+```ts
+elasticsearch({
+  client,
+  index: "products",
+  keywords: { brand: "brand.keyword" },
+});
+```
+
+The filter becomes a JSON `bool` query under `filter`, so it never changes a
+score and the facets count the same documents as the hits. A value travels as
+JSON, so nothing is escaped. The client runs only on a server, so put it
+behind your own endpoint for a browser.
+
+**A text field is compared by its tokens.** A `term` on a `text` field meets
+the analysed tokens, so `Nimbus` finds nothing in a field that indexed
+`nimbus`, and Elasticsearch refuses to sort or aggregate one. `keywords` names
+the exact field beside each text field, such as the `.keyword` a dynamic
+mapping adds, and filters, facets and sorts read it. A field not listed must be
+mapped as `keyword`, a number or a boolean.
+
+A total is exact for the relation `eq` and a lower bound for `gte`, which
+Elasticsearch reaches at 10,000 matches unless `trackTotalHits: true` counts
+every one. A search that timed out or lost a shard is a lower bound too, and
+its facets are not exhaustive. Paging ends at the index's `max_result_window`,
+10,000 unless you pass `maxResultWindow`, while the total keeps counting.
+
+## OpenSearch
+
+```sh
+pnpm add @priemskiyyy/scout-opensearch @opensearch-project/opensearch
+```
+
+```ts
+opensearch({
+  client,
+  index: "products",
+  keywords: { brand: "brand.keyword" },
+});
+```
+
+The translation is the one the Elasticsearch adapter uses, shared between the
+two, so everything above holds here. The OpenSearch client takes no signal, so
+an abort calls `abort()` on the request it returned, and the search still stops
+on the wire. `result.native` is the answer body, without the transport's
+headers and metadata.
 
 ## Orama
 
@@ -195,48 +235,30 @@ pnpm add @priemskiyyy/scout-orama @orama/orama
 ```
 
 ```ts
-adapter: orama({
+orama({
   db,
   search,
   revision: () => revision,
-  profiles: { default: {}, names: { properties: ["name"] } },
-  sorts: {
-    relevance: {},
-    priceAsc: { sortBy: { property: "price", order: "ASC" } },
-  },
+  profiles: { forgiving: { tolerance: 2 } },
 });
 ```
 
-Orama runs in the process that searches it, so a search costs no round trip, in
-a browser, in a React Native app or on a server. Orama's own `search` function
-is passed in beside the database, because Orama exports it as a function rather
-than as a method, and that is what keeps this package free of a runtime import.
+Orama's `search` function is passed in beside the database, because Orama
+exports it as a function rather than a method, and that keeps this package free
+of a runtime import.
 
 **A `string` property filters by token.** `where: { brand: "Acme Audio" }`
-matches every document whose brand contains `acme` or `audio`, which is not what
-`eq` means anywhere else in Scout. So the adapter translates a portable filter
-only for the kinds Orama matches by value, `number`, `enum` and `boolean`, and
-refuses the rest with `UnsupportedSearchFeatureError` rather than sending
-something that quietly means less. The fix is in the Orama schema, not in your
-search code: declare a field you mean to filter exactly as `enum`. Consumer code
-does not change. See [filters](filters.md).
+matches every brand containing `acme` or `audio`, which is not what `eq` means
+anywhere else in Scout. So a filter on a `string` property is refused. Declare a
+field you filter exactly as `enum` in the Orama schema; consumer code does not
+change. Orama counts numbers into ranges the portable facet request does not
+carry, so a `number` facet is refused too, and so is any highlight, because
+Orama's keyword search reports no match offsets.
 
-**The corpus revision is yours.** Scout does not watch your database. Nothing in
-it reads, hooks or compares the corpus, so the application owns a revision and
-the adapter folds it into the query identity. Bump it after an insert, an
-update, a removal, a `load()` or a rebuild. Forget to bump it and TanStack Query
-keeps answering from the old corpus; bump it too often and you lose cache hits,
-which is the cheap mistake of the two. It must not be a credential, because it
-reaches cache keys and devtools.
-
-Totals are exact with scope `"matches"`, so whether another page exists is known
-rather than guessed. There is no maximum page size. Facets work on `enum`,
-`boolean` and `string` properties and are refused on a `number` property,
-because Orama counts numbers into ranges the portable facet request does not
-carry. Highlights are `"none"`: Orama's keyword search reports no match offsets,
-and deriving them from a tokenizer this package cannot see would be fabricating
-them. `.provider()` takes `never` here, because nothing is merged into the Orama
-request.
+**The corpus revision is yours.** Nothing in Scout watches your database, so the
+application owns a revision and the adapter folds it into the query identity.
+Bump it after an insert, an update, a removal or a rebuild. It reaches cache
+keys and devtools, so it must not be a credential.
 
 ## MiniSearch
 
@@ -245,100 +267,22 @@ pnpm add @priemskiyyy/scout-minisearch minisearch
 ```
 
 ```ts
-adapter: minisearch({
+minisearch({
   index: catalogue,
+  wildcard: MiniSearch.wildcard,
   revision: () => catalogueVersion,
-  profiles: { default: { fields: ["title", "category"], prefix: true } },
-  sorts: { relevance: "relevance" },
+  profiles: { titles: { prefix: true, fuzzy: 0.2 } },
 });
 ```
 
-MiniSearch implements less of the contract than the others, and says so rather
-than pretending. What it does declare is real.
-
-**Filtering is real.** MiniSearch's `filter` option is a predicate it calls for
-each candidate while it is still assembling results, so it sees every match and
-not one page. Translating the filter AST into it narrows the set MiniSearch
-itself counted: the total stays exact, and page two is still the real page two.
-
-**Facets are refused, not scanned.** There is no facet index, so counts could
-only come from materialising every match on every query and tallying it, which
-is a full scan that stays invisible until the corpus grows. Counting the
-returned page instead would be wrong in a way nobody can see.
-
-**Relevance is the only order.** Every declared sort name maps to `"relevance"`
-and may be an alias, so `sorts: { best: "relevance" }` lets an index declare
-`best`. Any other name throws.
-
-**Stored fields are not the document.** A result carries the id, the score, the
-match report and only the fields in `storeFields`, while Scout validates the
-whole document against the schema. Leave `resolve` off when every schema field
-is stored; pass it when only some are, or when the schema's id field is not
-named `id`. It runs before validation, so what it returns is what the schema
-sees, and it runs for every match a filtered query considers rather than only
-for the page, so keep it to a lookup.
-
-`took` is `null`, because MiniSearch reports no timing of its own and the core
-measures the call rather than being handed a number the adapter invented. The
-corpus revision works exactly as it does for Orama.
-
-## Swapping one for another
-
-The index declaration is what ports. Changing the adapter changes the
-configuration under `adapter:` and nothing else, and a name the new adapter does
-not cover is a compile error in that configuration rather than a runtime
-surprise at a call site.
-
-What does not port is what the engines genuinely disagree about, and those
-differences are visible rather than hidden: a facet on MiniSearch throws, a
-highlight on Orama throws, a page of 500 on Typesense throws, and an abort on
-Algolia stops your wait rather than the query. Read the table above before a
-migration, not after.
-
-## What is verified
-
-Each adapter runs the shared conformance suite from
-`@priemskiyyy/scout/testing`, which probes the declared capabilities and runs
-only the blocks they admit, plus its own tests for the strings it emits, its
-escaping, its page translation, its accuracy mapping and its highlight
-construction.
-
-Those tests are not equally strong, and the difference matters:
-
-- Orama, MiniSearch and Fuse.js run against the real engine package with a real corpus,
-  because the engine is in process and there is nothing to stand in for. Those
-  tests are real by construction.
-- Typesense, Algolia and Meilisearch are tested against an in-process fake of
-  the SDK's shape, with a `*.contracts.ts` file pinning that fake and the
-  adapter's structural types to the real SDK typings. A fake that reimplemented
-  the engine's filter grammar would only prove the fake, so those tests assert
-  the exact request the adapter sends rather than the results the fake invented.
-  Delivery against a running server is a separate concern, and
-  [verification](verification.md) is the matrix that says exactly what has been
-  run against a real backend and what has not.
-
-To add an engine of your own, see [writing an adapter](writing-an-adapter.md).
-
-## HTTP, your own endpoint
-
-`@priemskiyyy/scout-http` is the one adapter with no engine behind it. It is for
-a search backend you own, whether that is a service wrapping Elasticsearch, a
-handwritten endpoint over your database, or a gateway in front of one of the
-engines above.
-
-It deliberately does not decide what your request body or your response JSON
-look like, because that would be a protocol imposed on every backend. You pass
-`toRequest` and `fromResponse`, and your own `capabilities`. If you control both
-ends, pass the `scoutWireRequest` and `scoutWireResponse` pair instead and skip
-the decision.
-
-One thing to understand before using it: for every other adapter, the capability
-record is a statement the adapter's author verified against a real engine. Here
-it is a promise you are making about your own backend, and nothing checks it. If
-you declare `between: true` and your endpoint ignores ranges, Scout will send
-the filter and believe the answer. The conformance suite is how you check
-yourself: run `testSearchAdapter` against your real endpoint or a fake that
-really evaluates filters, which is what this package's own tests do.
+MiniSearch filters with a predicate it calls for every candidate, so the total
+stays exact, and the adapter sorts the whole match set before it cuts a page.
+An empty query browses through `MiniSearch.wildcard`, which only exists from
+7.2 and which the adapter cannot import, so pass it in; without it an empty
+query is refused. Facets and highlights are refused: there is no facet index to
+count from and no match offsets to split. A result carries only `storeFields`,
+so every field a filter or a sort reads must be stored, or produced by
+`resolve`.
 
 ## Fuse.js
 
@@ -347,26 +291,81 @@ pnpm add @priemskiyyy/scout-fuse fuse.js
 ```
 
 ```ts
-adapter: fuse({
-  index: new Fuse(products, {
+fuse({
+  index: new Fuse(documents, {
     keys: ["name", "description"],
     includeMatches: true,
-    threshold: 0.3,
   }),
   revision: () => catalogueVersion,
-  profiles: { default: null },
-  sorts: { relevance: null },
 });
 ```
 
-Fuse 7.5 returns the complete match set. Scout evaluates portable filters over
-that set before slicing pages, so totals are exact. Native scores, match data
-and document references remain on the result. Match ranges become safe text
-parts, including paths for array elements; malformed ranges become plain text.
+Fuse returns every match, so the adapter filters, sorts and pages the whole set
+in process and the total is exact. A profile over fewer keys than Fuse indexes
+becomes a Fuse logical query naming each of them, which extended and token
+search cannot run, so there it is refused. Highlights need `includeMatches` on
+the instance you pass. Facets are refused.
 
-Enable `includeMatches` on the injected instance before requesting highlights.
-Facets are unsupported. Named sorts and profiles alias the instance's configured
-matching and ordering; there are no per-request `.provider()` options. Change
-`revision` when the corpus or configuration changes. Disposing Scout leaves the
-borrowed engine usable. An allowed empty query returns the whole collection in
-collection order, following Fuse 7.5.
+## HTTP, your own endpoint
+
+```sh
+pnpm add @priemskiyyy/scout-http
+```
+
+```ts
+http({
+  fingerprint: "catalogue-api",
+  request: async ({ search, signal }) => {
+    const response = await fetch("https://api.example.com/search", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(search),
+      signal,
+    });
+
+    if (!response.ok) {
+      throw new Error(`The search endpoint answered ${response.status}.`);
+    }
+
+    return response.json();
+  },
+});
+```
+
+`@priemskiyyy/scout-http` is for a search backend you own, reached through your
+own client. You give it one `request` function, and your client keeps the
+address, authentication, headers, retries and status handling. The adapter owns
+the wire format: it hands `request` the portable search, whose
+`JSON.stringify(search)` is its wire form, and `request` resolves with the
+backend's answer typed as a `ScoutWireResponse`. Your client owns that answer's
+shape the way it owns the address, so a client that does not trust its backend
+validates the JSON with its own schema library before returning it, and the
+index's schema still validates every document. `fingerprint` names the
+backend, without a credential, because it takes part in every query key.
+
+Your backend refuses a feature by answering `{ "refusal": { "message": "..." } }`,
+which reaches the caller as `unsupported-feature`, and it can say how far
+paging reaches with `retrievable`. Anything else that fails is a `provider`
+error. The search stops on the wire only when your `request` passes `signal`
+on. Nothing checks what your backend claims, so run the conformance suite
+against it. See [writing an adapter](writing-an-adapter.md).
+
+## Swapping one for another
+
+The index declaration is what ports. Swapping engines replaces one adapter and
+nothing else. What the engines genuinely disagree about stays visible: a facet
+on MiniSearch is refused, a highlight on Orama is refused, a page of 500 on
+Typesense is refused, and an abort on Algolia stops your wait rather than the
+query. Read the table above before a migration, not after.
+
+## What is verified
+
+Each adapter runs the shared conformance suite from
+`@priemskiyyy/scout/testing` over an index its tests declare, plus its own tests
+for what it sends and how it reads the answer. Orama, MiniSearch and Fuse.js run
+the real engine in process. Typesense, Algolia, Meilisearch, MongoDB Search,
+Elasticsearch and OpenSearch run against an in-process fake pinned to the real
+SDK's types, so their filters are asserted as the exact request sent, and all
+of them but Algolia run the conformance suite against the real engine in Docker
+too. [Verification](verification.md) says exactly what has
+and has not been run against a real backend.

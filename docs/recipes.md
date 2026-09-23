@@ -1,5 +1,5 @@
 ---
-description: "Search as you type with a debounced value, de-duplicating hits after flattening infinite pages, and keeping selection on hit ids rather than positions."
+description: "Search as you type with a debounced value, browsing on an empty query, de-duplicating hits after flattening infinite pages, and keeping selection on hit ids rather than positions."
 ---
 
 # Recipes
@@ -25,6 +25,7 @@ export const ProductSearch = () => {
 
   useEffect(() => {
     const timer = setTimeout(() => setDebounced(text), 200);
+
     return () => clearTimeout(timer);
   }, [text]);
 
@@ -37,7 +38,6 @@ export const ProductSearch = () => {
   // TanStack Query: fetching, caching and cancellation.
   const { data, isFetching } = useQuery({
     ...queryOptions(search),
-    enabled: debounced.length > 0,
     staleTime: 30_000,
   });
 
@@ -58,10 +58,10 @@ export const ProductSearch = () => {
 
 Three things are load bearing here.
 
-`enabled: debounced.length > 0` is not politeness. An index rejects an empty
-query with `SearchValidationError` unless it declares `emptyQuery: "allow"`,
-because what an engine does with empty text differs and guessing a wildcard
-would be a silent transformation. See [indexes](indexes.md).
+The empty box is a search too. An empty query browses, every document the
+filters allow in the requested order, so the screen shows the catalogue before
+the first keystroke. If it should show nothing instead, add
+`enabled: debounced.length > 0`.
 
 `stale` is derived rather than observed. `isFetching` alone flickers, and it is
 false during the debounce window, when the results on screen are already known
@@ -74,13 +74,11 @@ sends, and the TanStack integration is what calls it. The `useMemo` is there to
 keep the query key stable between renders that did not change the text, not to
 save allocation.
 
-The one engine specific note: on an adapter with
-`cancellation: "logical"`, which is Algolia, Orama and MiniSearch, aborting a
-superseded keystroke stops Scout waiting but does not stop the engine. On
-Algolia that query still runs and is still billed, so the debounce interval is a
-cost decision, not only a latency one. Typesense and Meilisearch declare
-`cancellation: "transport"` and really cancel the request. See
-[adapters](adapters.md).
+The one engine specific note: aborting a superseded keystroke settles the query
+at once on every adapter, but only an engine whose SDK accepts the signal stops
+working. On an engine that bills per query and cannot cancel, that query still
+runs and is still billed, so the debounce interval is a cost decision, not only
+a latency one. See [adapters](adapters.md).
 
 ## De-duplicate after flattening
 
@@ -101,7 +99,7 @@ import {
 } from "@priemskiyyy/scout-tanstack-query";
 
 const query = useInfiniteQuery({
-  ...infiniteQueryOptions(products.search(debounced).pageSize(20)),
+  ...infiniteQueryOptions(products.search(debounced).page({ size: 20 })),
   staleTime: 30_000,
 });
 
@@ -138,11 +136,15 @@ const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
 const handleToggle = (id: string) => {
   setSelected((current) => {
     const next = new Set(current);
+
     if (next.has(id)) {
       next.delete(id);
+
       return next;
     }
+
     next.add(id);
+
     return next;
   });
 };
