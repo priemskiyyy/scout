@@ -21,8 +21,10 @@ export type FacetValues<
   // whose document type is not yet resolved still produces a usable result
   // type instead of an uninhabited one.
   [TField in TRequested]: TField extends keyof TShape["document"]
-    ? TShape["document"][TField] extends readonly (infer TElement)[]
+    ? NonNullable<
+        TShape["document"][TField]
+      > extends readonly (infer TElement)[]
       ? TElement
-      : TShape["document"][TField]
+      : NonNullable<TShape["document"][TField]>
     : unknown;
 };

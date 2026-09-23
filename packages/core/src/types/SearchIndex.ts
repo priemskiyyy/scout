@@ -11,7 +11,7 @@ import type { SearchBuilder } from "src/types/SearchBuilder";
  * @example
  * ```ts
  * const products = scout.index("products");
- * const result = await products.search("boots").pageSize(20).execute();
+ * const result = await products.search("boots").page({ size: 20 }).execute();
  * ```
  */
 export type SearchIndex<TShape extends IndexShape> = {

@@ -18,7 +18,7 @@ import type { SearchResult } from "src/types/SearchResult";
  *   )
  *   .sort("priceAsc")
  *   .facets("brand")
- *   .pageSize(20);
+ *   .page({ size: 20 });
  *
  * const result = await search.execute();
  * ```
@@ -51,9 +51,14 @@ export type SearchBuilder<
   highlight: <const TNames extends readonly TShape["highlightable"][]>(
     ...names: TNames
   ) => SearchBuilder<TShape, TFacet, THighlight | TNames[number]>;
-  /** One-based. Adapters translate provider numbering. */
-  page: (number: number) => SearchBuilder<TShape, TFacet, THighlight>;
-  pageSize: (size: number) => SearchBuilder<TShape, TFacet, THighlight>;
+  /**
+   * Moves to a page, resizes it, or both, and keeps what is left out. Pages
+   * are one-based; adapters translate provider numbering.
+   */
+  page: (page: {
+    current?: number;
+    size?: number;
+  }) => SearchBuilder<TShape, TFacet, THighlight>;
   /**
    * Adapter typed provider options. These take part in the query identity, so
    * two searches differing only here do not share a cache entry. They cannot

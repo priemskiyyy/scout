@@ -1,16 +1,17 @@
 /**
- * Carries an index's document, portable field names and native types through
- * the builder and result types.
+ * Carries one index's document, portable names and native types through the
+ * builder and result types. Scout assembles it from the index declaration and
+ * the adapter serving it.
  *
  * @example
  * ```ts
  * type ProductShape = IndexShape & {
  *   document: Product; filterable: "brand" | "price"; facetable: "brand";
- *   highlightable: "name"; sort: "relevance"; profile: "default";
+ *   highlightable: "name"; sort: "relevance" | "priceAsc"; profile: "default";
  * };
  * ```
  *
- * @see [IndexDeclaration usage](https://priemskiyyy.github.io/scout/indexes.html)
+ * @see [Indexes](https://priemskiyyy.github.io/scout/indexes.html)
  */
 export type IndexShape = {
   document: unknown;

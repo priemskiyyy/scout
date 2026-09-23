@@ -38,12 +38,12 @@ type Ordering<TValue> = {
  *
  * @see [FilterFields usage](https://priemskiyyy.github.io/scout/filters.html)
  */
-export type FilterField<TValue> = [TValue] extends [boolean]
+export type FilterField<TValue> = [NonNullable<TValue>] extends [boolean]
   ? Equality<boolean>
-  : [TValue] extends [readonly (infer TElement)[]]
+  : [NonNullable<TValue>] extends [readonly (infer TElement)[]]
     ? FilterField<TElement>
-    : [TValue] extends [number]
+    : [NonNullable<TValue>] extends [number]
       ? Equality<number> & Membership<number> & Ordering<number>
-      : [TValue] extends [string]
+      : [NonNullable<TValue>] extends [string]
         ? Equality<string> & Membership<string>
         : never;

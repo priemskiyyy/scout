@@ -1,20 +1,17 @@
 /**
- * One-based page metadata. Adapters translate provider numbering, so Algolia's
- * zero-based page 0 arrives here as page 1.
- *
- * `next` is `"unknown"` when the engine cannot say whether another page exists.
- * That is preserved rather than guessed; the TanStack integration decides what
- * to do with it and documents the choice.
+ * One-based page metadata, derived by the core. `next` is `"unknown"` when
+ * the engine's count cannot say whether another page exists; that is preserved
+ * rather than guessed, and the TanStack integration documents what it does
+ * with it.
  *
  * @example
  * ```ts
- * const page: SearchPage = { kind: "page", current: 1, size: 20, next: "unknown", previous: null };
+ * const page: SearchPage = { current: 1, size: 20, next: "unknown", previous: null };
  * ```
  *
- * @see [SearchResult usage](https://priemskiyyy.github.io/scout/pagination.html)
+ * @see [Pagination](https://priemskiyyy.github.io/scout/pagination.html)
  */
 export type SearchPage = {
-  readonly kind: "page";
   readonly current: number;
   readonly size: number;
   readonly next: number | null | "unknown";

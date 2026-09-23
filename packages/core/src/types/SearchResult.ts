@@ -9,7 +9,9 @@ import type { SearchTotal } from "src/types/SearchTotal";
  * `facets` is keyed by the fields the search asked for, so reading a facet that
  * was never requested is a compile error rather than an undefined at runtime.
  * `skipped` counts documents dropped by `validate: "skip"`, which matters
- * because dropping a hit changes what the page contains.
+ * because dropping a hit changes what the page contains. `native` is `null`
+ * when Scout answered without asking the engine, for a filter that can match
+ * nothing.
  *
  * @example
  * ```ts
@@ -37,5 +39,5 @@ export type SearchResult<
     readonly milliseconds: number;
     readonly source: "provider" | "scout";
   };
-  readonly native: TNativeResponse;
+  readonly native: TNativeResponse | null;
 };

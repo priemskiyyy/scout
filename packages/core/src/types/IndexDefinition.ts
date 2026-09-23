@@ -1,57 +1,60 @@
-import type { SearchAdapter } from "src/types/SearchAdapter";
+import type { FacetTypes } from "src/types/FacetTypes";
+import type { ProfileDefinition } from "src/types/ProfileDefinition";
+import type { SortDefinition } from "src/types/SortDefinition";
 import type { StandardSchema } from "src/types/StandardSchema";
+import type { TextFieldOf } from "src/types/TextFieldOf";
 
 /**
- * Declares an index's portable contract. The adapter must cover every named
- * sort and profile.
+ * Declares an index's portable contract, independent of the engine that
+ * serves it. Every part but the schema, the id and the searchable fields is
+ * optional.
+ *
+ * - `searchable` holds the fields the query text runs against by default.
+ * - `facetable` maps each facetable field to its value type, checked against
+ *   the schema, because some engines return every facet value as a string.
+ * - `sorts` defines named sorts by their fields. `"relevance"`, the engine's
+ *   own order, always exists and is the default.
+ * - `profiles` defines named searches over other fields. `"default"` always
+ *   exists and searches `searchable`.
+ * - `validate` decides what a document that fails the schema does: `"error"`
+ *   fails the search, `"skip"` drops it and counts it on the result.
  *
  * @example
  * ```ts
  * const products = index({ schema: ProductSchema, id: (product) => product.id,
- *   filterable: ["brand"], facetable: ["brand"], highlightable: ["name"],
- *   sorts: ["relevance"], profiles: ["default"], adapter });
+ *   searchable: ["name"], filterable: ["brand", "price"], facetable: { brand: "string" },
+ *   sorts: { priceAsc: { price: "asc" } } });
  * ```
  *
- * @see [index usage](https://priemskiyyy.github.io/scout/indexes.html)
+ * @see [Indexes](https://priemskiyyy.github.io/scout/indexes.html)
  */
 export type IndexDefinition<
   TDocument,
-  TFilterable extends readonly (keyof TDocument & string)[],
-  TFacetable extends readonly (keyof TDocument & string)[],
-  THighlightable extends readonly (keyof TDocument & string)[],
-  TSortName extends string,
-  TProfileName extends string,
-  TNative,
-  TOptions,
-  TNativeHit,
-  TNativeResponse,
+  TSearchable extends TextFieldOf<TDocument>,
+  TFilterable extends keyof TDocument & string,
+  TFacets extends FacetTypes<TDocument>,
+  THighlightable extends keyof TDocument & string,
+  TSorts extends Readonly<Record<string, SortDefinition<TDocument>>>,
+  TProfiles extends Readonly<
+    Record<string, ProfileDefinition<TextFieldOf<TDocument>>>
+  >,
 > = {
   schema: StandardSchema<TDocument>;
   /** Stable identity for a document. Never a hit's position. */
   id: (document: TDocument) => string;
-  filterable: TFilterable;
-  facetable: TFacetable;
-  highlightable: THighlightable;
-  sorts: readonly [TSortName, ...TSortName[]];
-  profiles: readonly [TProfileName, ...TProfileName[]];
-  adapter: SearchAdapter<TNative, TOptions, TNativeHit, TNativeResponse> & {
-    sorts: Readonly<Record<TSortName, unknown>>;
-    profiles: Readonly<Record<TProfileName, unknown>>;
+  searchable: readonly [TSearchable, ...TSearchable[]];
+  filterable?: readonly TFilterable[];
+  facetable?: TFacets & {
+    readonly [TField in Exclude<keyof TFacets, keyof TDocument>]: never;
   };
-  /**
-   * What to do with a document that fails the schema. `"error"` fails the
-   * search, `"skip"` drops it and reports how many were dropped, because that
-   * changes what the page contains.
-   *
-   * There is no mode that skips validation and still claims a document type.
-   * The validator is the only thing that turns a provider's response into the
-   * declared type, so skipping it would make the type a claim nothing checks.
-   */
+  highlightable?: readonly THighlightable[];
+  sorts?: TSorts & {
+    readonly relevance?: never;
+  } & {
+    readonly [TName in keyof TSorts]: {
+      readonly [TField in Exclude<keyof TSorts[TName], keyof TDocument>]: never;
+    };
+  };
+  profiles?: TProfiles & { readonly default?: never };
   validate?: "error" | "skip";
-  /**
-   * Whether an empty query reaches the provider. Rejecting is the default,
-   * because what an engine does with empty text differs and guessing a wildcard
-   * would be a silent transformation.
-   */
-  emptyQuery?: "allow" | "reject";
 };

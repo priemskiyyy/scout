@@ -1,9 +1,9 @@
 /**
- * The primitive type encoded by a provider's string facet labels.
+ * The primitive type of a facet's values.
  *
  * @example
  * ```ts
- * const facets: Readonly<Record<string, FacetValueType>> = { price: "number" };
+ * const type: FacetValueType = "number";
  * ```
  */
 export type FacetValueType = "string" | "number" | "boolean";

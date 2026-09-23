@@ -1,52 +1,70 @@
-import { createSearchAdapter } from "src/generators/createSearchAdapter";
 import { createMockSearchAdapter } from "src/mock/createMockSearchAdapter";
-import { FULL_CAPABILITIES } from "src/utils/constants/defaultCapabilities";
+import type { AnySearchAdapter } from "src/types/AnySearchAdapter";
 import type { FilterExpression } from "src/types/FilterExpression";
 import type { FilterOperator } from "src/types/FilterOperator";
-import type { SearchFacet } from "src/types/SearchFacet";
 import type { HighlightFragment } from "src/types/HighlightFragment";
-import { Scout } from "src/utils/Scout";
+import type { SearchAdapter } from "src/types/SearchAdapter";
+import type { SearchFacet } from "src/types/SearchFacet";
 import { index } from "src/utils/defineIndex";
 import {
   ProductSchema,
   type Product,
 } from "src/utils/internal/testSchema.fixture";
+import { Scout } from "src/utils/Scout";
 
 type Equal<A, B> =
   (<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
     ? true
     : false;
-// A broken assertion fails to satisfy the constraint, so it is a compile error
-// rather than a type nobody reads.
+
+// A broken assertion fails the constraint, so it is a compile error rather
+// than a type nobody reads.
 type Expect<TAssertion extends true> = TAssertion;
 
-const { adapter } = createMockSearchAdapter({
-  sorts: { relevance: null, priceAsc: null },
-  profiles: { default: null, autocomplete: null },
-});
+type Executed<TBuilder extends { execute: (...args: never[]) => unknown }> =
+  Awaited<ReturnType<TBuilder["execute"]>>;
 
 const products = index({
   schema: ProductSchema,
   id: (product) => product.id,
+  searchable: ["name", "tags"],
   filterable: ["brand", "price", "inStock", "tags"],
-  facetable: ["brand", "price"],
+  facetable: { brand: "string", price: "number", tags: "string" },
   highlightable: ["name"],
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default", "autocomplete"],
-  adapter,
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { names: { searchable: ["name"] } },
 });
 
-const scout = new Scout({ indexes: { products } });
+/** An engine with options, hits and responses of its own. */
+const engine: SearchAdapter<
+  { client: true },
+  { boost: number },
+  { score: number },
+  { took: number }
+> = {
+  name: "engine",
+  native: { client: true },
+  fingerprint: () => "engine",
+  search: () => ({
+    hits: [],
+    total: { accuracy: "unknown", scope: "unknown" },
+    facets: {},
+    took: null,
+    native: { took: 1 },
+  }),
+};
+
+const scout = new Scout({
+  indexes: { products },
+  adapters: { products: engine },
+});
+
 const handle = scout.index("products");
 
-// @ts-expect-error An index declaration keeps the adapter it was created with.
-products.adapter = adapter;
-// @ts-expect-error An index declaration's handle factory is immutable.
-products.create = () => handle;
+// An adapter with options of its own is still an adapter.
+const erased: AnySearchAdapter = engine;
 
 // The document type survives the whole chain.
-type Executed<TBuilder extends { execute: (...args: never[]) => unknown }> =
-  Awaited<ReturnType<TBuilder["execute"]>>;
 type DocumentSurvives = Expect<
   Equal<
     Executed<ReturnType<typeof handle.search>>["hits"][number]["document"],
@@ -54,18 +72,31 @@ type DocumentSurvives = Expect<
   >
 >;
 
-// A requested facet is typed by its schema field; an array field reports its
+// A requested facet is typed by its schema field, and an array field by its
 // element type.
-const faceted = handle.search("shoe").facets("brand", "price");
+const faceted = handle.search("shoe").facets("brand", "price", "tags");
+
 type BrandFacet = Expect<
   Equal<Executed<typeof faceted>["facets"]["brand"], SearchFacet<string>>
 >;
+
 type PriceFacet = Expect<
   Equal<Executed<typeof faceted>["facets"]["price"], SearchFacet<number>>
 >;
 
-// A requested highlight is present on every hit, and nothing else is.
+type TagsFacet = Expect<
+  Equal<Executed<typeof faceted>["facets"]["tags"], SearchFacet<string>>
+>;
+
+const unrequested = handle.search("shoe");
+
+type NoFacetsRequested = Expect<
+  Equal<Executed<typeof unrequested>["facets"], Record<never, never>>
+>;
+
+// A requested highlight is on every hit, and nothing else is.
 const highlighted = handle.search("shoe").highlight("name");
+
 type NameHighlight = Expect<
   Equal<
     Executed<typeof highlighted>["hits"][number]["highlights"],
@@ -73,19 +104,28 @@ type NameHighlight = Expect<
   >
 >;
 
-// The native handle keeps the adapter's own type.
-type NativeHandle = Expect<
+// The native types are the adapter's own.
+type NativeClient = Expect<Equal<typeof handle.native, { client: true }>>;
+
+type NativeHit = Expect<
   Equal<
-    typeof handle.native,
-    { requests: (typeof adapter)["native"]["requests"] }
+    Executed<typeof unrequested>["hits"][number]["native"],
+    { score: number }
   >
 >;
 
+type NativeResponse = Expect<
+  Equal<Executed<typeof unrequested>["native"], { took: number } | null>
+>;
+
+handle.search("shoe").provider({ boost: 2 });
+// @ts-expect-error provider options are the adapter's own
+handle.search("shoe").provider({ boost: "high" });
 // @ts-expect-error a sort the index never declared
 handle.search("shoe").sort("nameAsc");
 // @ts-expect-error a profile the index never declared
 handle.search("shoe").profile("fuzzy");
-// @ts-expect-error `name` was never declared filterable
+// @ts-expect-error name was never declared filterable
 handle.search("shoe").where((product) => product.name.eq("a"));
 // @ts-expect-error a string field has no range operators
 handle.search("shoe").where((product) => product.brand.between("a", "b"));
@@ -93,143 +133,194 @@ handle.search("shoe").where((product) => product.brand.between("a", "b"));
 handle.search("shoe").where((product) => product.inStock.gt(true));
 // @ts-expect-error an array of strings filters by its element type
 handle.search("shoe").where((product) => product.tags.eq(1));
-// @ts-expect-error `name` was never declared facetable
-handle.search("shoe").facets("name");
-// @ts-expect-error `brand` was never declared highlightable
+// @ts-expect-error inStock was never declared facetable
+handle.search("shoe").facets("inStock");
+// @ts-expect-error brand was never declared highlightable
 handle.search("shoe").highlight("brand");
 // @ts-expect-error an index that was never declared
 scout.index("orders");
 
-const unrequested = handle.search("shoe");
-type NoFacetsRequested = Expect<
-  Equal<Executed<typeof unrequested>["facets"], Record<never, never>>
->;
+// A hand-built comparison carries the value its operator compares with, so an
+// adapter never has to check it. Each directive sits on the offending
+// property, which is where the error is reported.
+const stringRange: FilterExpression = {
+  type: "comparison",
+  field: "brand",
+  operator: "gt",
+  // @ts-expect-error a range compares with a number
+  value: "A",
+};
 
-// A custom mapping must preserve coverage without relying on the mock.
-// This is an adapter built the way a real one is, from
-// `createSearchAdapter` with no explicit type arguments, which is what keeps the
-// literal keys of `sorts` and `profiles`. A `Readonly<Record<string, unknown>>`
-// satisfies a record of any literal keys, so if those names were erased here
-// every provider would look like it supported every sort.
-const stubAdapter = <const TSort extends string>(sorts: Record<TSort, null>) =>
-  createSearchAdapter({
-    name: "stub",
-    native: null,
-    capabilities: FULL_CAPABILITIES,
-    sorts,
-    profiles: { default: null },
-    reservedOptions: [],
-    fingerprint: () => "stub",
-    search: () =>
-      Promise.resolve({
-        hits: [],
-        page: {
-          kind: "page" as const,
-          current: 1,
-          size: 20,
-          next: null,
-          previous: null,
-        },
-        total: { accuracy: "unknown" as const, scope: "unknown" as const },
-        facets: {},
-        took: null,
-        native: null,
-      }),
-    dispose: () => undefined,
-  });
+const bareSet: FilterExpression = {
+  type: "comparison",
+  field: "brand",
+  operator: "in",
+  // @ts-expect-error a set compares with a list of values
+  value: "Nike",
+};
 
-const covering = stubAdapter({ relevance: null, priceAsc: null });
-// The wrapper requires a request and signal even when the mapping ignores them.
-covering.search(
-  {
-    index: "products",
-    query: "shoe",
-    profile: "default",
-    sort: "relevance",
-    filter: { type: "constant", value: true },
-    facets: [],
-    highlights: [],
-    page: { current: 1, size: 20 },
-    provider: null,
+const oneBound: FilterExpression = {
+  type: "comparison",
+  field: "price",
+  operator: "between",
+  // @ts-expect-error between takes a lower and an upper bound
+  value: [1],
+};
+
+const objectValue: FilterExpression = {
+  type: "comparison",
+  field: "brand",
+  operator: "eq",
+  // @ts-expect-error an equality compares with a string, a number or a boolean
+  value: {},
+};
+
+// A page is moved or resized with an object that keeps what it leaves out.
+handle.search("shoe").page({ size: 20 }).page({ current: 2 });
+// @ts-expect-error page takes { current, size }, not a bare number
+handle.search("shoe").page(2);
+
+// A declaration says only what its schema allows.
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  // @ts-expect-error price is not text, so it cannot be searched
+  searchable: ["price"],
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error brand holds strings, not numbers
+  facetable: { brand: "number" },
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error colour is not a field of the document
+  facetable: { colour: "string" },
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error relevance is built in
+  sorts: { relevance: { price: "desc" } },
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error a sort orders by fields of the document
+  sorts: { newest: { createdAt: "desc" } },
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error a direction is asc or desc
+  sorts: { priceAsc: { price: "up" } },
+});
+
+index({
+  schema: ProductSchema,
+  id: (product) => product.id,
+  searchable: ["name"],
+  // @ts-expect-error default is built in
+  profiles: { default: { searchable: ["name"] } },
+});
+
+// Every index has an adapter, and every adapter an index.
+new Scout({
+  indexes: { products },
+  // @ts-expect-error the products index has no adapter
+  adapters: {},
+});
+
+new Scout({
+  indexes: { products },
+  // @ts-expect-error orders serves no index
+  adapters: { products: engine, orders: engine },
+});
+
+// An adapter that serves sorts through its own configuration covers them all.
+new Scout({
+  indexes: { products },
+  adapters: {
+    products: createMockSearchAdapter({ sorts: { priceAsc: "replica" } })
+      .adapter,
   },
-  { signal: new AbortController().signal },
-);
-// @ts-expect-error The wrapper reads its context even if the mapping does not.
-covering.search();
-index({
-  schema: ProductSchema,
-  id: (product) => product.id,
-  filterable: ["brand"],
-  facetable: [],
-  highlightable: [],
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default"],
-  adapter: covering,
 });
 
-const notCovering = stubAdapter({ relevance: null });
-index({
-  schema: ProductSchema,
-  id: (product) => product.id,
-  filterable: ["brand"],
-  facetable: [],
-  highlightable: [],
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default"],
-  // @ts-expect-error the stub adapter declares no priceAsc sort, decision D2
-  adapter: notCovering,
+/** An engine that serves each sort from configuration of its own. */
+const replicas = <const TSort extends string>(
+  sorts: Readonly<Record<TSort, string>>,
+): SearchAdapter<null> & {
+  readonly sorts: Readonly<Record<TSort, string>>;
+} => ({
+  ...createMockSearchAdapter().adapter,
+  native: null,
+  sorts,
 });
 
-const { adapter: missingSort } = createMockSearchAdapter({
-  sorts: { relevance: null },
-  profiles: { default: null },
-});
-index({
-  schema: ProductSchema,
-  id: (product) => product.id,
-  filterable: ["brand"],
-  facetable: [],
-  highlightable: [],
-  // The directive sits on the line the error is reported on, which for an
-  // object literal is the offending property and not the call.
-  // @ts-expect-error the adapter does not cover every declared sort, decision D2
-  sorts: ["relevance", "priceAsc"],
-  profiles: ["default"],
-  adapter: missingSort,
+new Scout({
+  indexes: { products },
+  adapters: { products: replicas({ priceAsc: "products_price_asc" }) },
 });
 
-// `Omit` and `Pick` are not distributive: applied to a union they collapse it to
-// the intersection of its keys, silently. `FilterExpression` is a five member
-// union, so any transform over it has to distribute explicitly. Nothing in the
-// core does this today; this is the guard against the next one that tries.
+new Scout({
+  indexes: { products },
+  // @ts-expect-error the adapter's sorts have no priceAsc
+  adapters: { products: replicas({ newest: "products_newest" }) },
+});
+
+// Omit and Pick are not distributive: over a union they keep only the shared
+// keys, silently. Any transform over FilterExpression has to distribute.
 type DistributiveOmit<TUnion, TKey extends PropertyKey> = TUnion extends unknown
   ? Omit<TUnion, TKey>
   : never;
 
-// The built in form flattens: every variant loses its own members and only the
-// shared discriminant survives, so `type` is all that is left.
-type Flattened = keyof Omit<FilterExpression, "never">;
-type OmitFlattensAUnion = Expect<Equal<Flattened, "type">>;
+type OmitFlattensAUnion = Expect<
+  Equal<keyof Omit<FilterExpression, "never">, "type">
+>;
 
-// The distributive form keeps each variant, so the comparison arm still has the
-// members that make it a comparison.
-type Distributed = DistributiveOmit<FilterExpression, "never">;
 type DistributiveOmitKeepsEachVariant = Expect<
   Equal<
-    Extract<Distributed, { type: "comparison" }>["operator"],
+    Extract<
+      DistributiveOmit<FilterExpression, "never">,
+      { type: "comparison" }
+    >["operator"],
     FilterOperator
   >
 >;
 
 // Exported so the probes count as used; nothing imports this file.
-export { faceted, highlighted, unrequested };
+export {
+  bareSet,
+  erased,
+  faceted,
+  highlighted,
+  objectValue,
+  oneBound,
+  stringRange,
+  unrequested,
+};
 export type {
   BrandFacet,
   DistributiveOmitKeepsEachVariant,
-  OmitFlattensAUnion,
   DocumentSurvives,
   NameHighlight,
-  NativeHandle,
+  NativeClient,
+  NativeHit,
+  NativeResponse,
   NoFacetsRequested,
+  OmitFlattensAUnion,
   PriceFacet,
+  TagsFacet,
 };
