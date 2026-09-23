@@ -6,99 +6,118 @@ description: "How the Scout runtime is owned: the search path, what refuses a se
 
 The runtime has these owners. Follow them in this order:
 
-| Owner                 | Responsibility                                                           |
-| --------------------- | ------------------------------------------------------------------------ |
-| `Scout`               | Holds the declared indexes and coordinates disposal. Nothing else.       |
-| `index()`             | Resolves one index's declarations once and builds its field objects.     |
-| `SearchBuilder`       | Carries an immutable adapter request. Each chain method copies it.       |
-| `normalizeFilter`     | Normalises groups, constants and set operands for identity and dispatch. |
-| `canonicalize`        | Serializes supported values deterministically for query identity.        |
-| `checkCapabilities`   | Refuses a search the adapter cannot translate, before it is sent.        |
-| `executeSearch`       | Checks a request, dispatches it and calls the result mapper.             |
-| `createSearchAdapter` | Supplies disposal, refusal after disposal, and abort handling.           |
-| The adapter           | Translates one request onto one engine and nothing more.                 |
+| Owner               | Responsibility                                                                |
+| ------------------- | ----------------------------------------------------------------------------- |
+| `index()`           | Checks one declaration once, resolves its sorts and profiles, and freezes it. |
+| `Scout`             | Binds one adapter to each index, checks the binding, and owns disposal.       |
+| `SearchBuilder`     | Carries an immutable description of one search. Each method copies it.        |
+| `resolveSearch`     | Resolves a description against its index into the request an adapter gets.    |
+| `normalizeFilter`   | Normalises groups, constants and set operands for identity and dispatch.      |
+| `canonicalize`      | Serialises supported values deterministically for query identity.             |
+| `executeSearch`     | Answers contradictions, races the adapter against abort and disposal.         |
+| `mapSearchResponse` | Validates documents, decodes facet values and derives the page.               |
+| The adapter         | Translates one request onto one engine and nothing more.                      |
 
 ## Principles
 
 1. Normalize the application-facing contract, not the engines. Adapters
    translate; the core owns the contract.
-2. An index declares its portable names; the adapter is required to cover them.
-3. Unsupported portable behaviour throws. It is never silently dropped and never
-   emulated over one returned page.
+2. An index declares its portable names and what each one means; an adapter
+   serves them, and one that needs configuration per name covers every name.
+3. Unsupported portable behaviour is refused. It is never silently dropped and
+   never emulated over one returned page.
 4. Results preserve uncertainty. A total is exact, estimated, a lower bound or
    unknown, and a facet says whether it was exhaustive.
 5. Highlights are safe text parts, never trusted markup.
 6. Query identity is deterministic, and never contains a credential.
-7. Building a search is pure. Only `execute()` reaches a provider.
+7. Building a search is pure. Only `execute()` reaches an engine.
 8. TanStack Query owns caching, staleness, retries and infinite page storage.
    Scout sets none of those defaults.
-9. Cleanup is idempotent, and a disposed index cannot produce results.
+9. Cleanup is idempotent, and a disposed `Scout` cannot produce results.
 10. The core never branches on an adapter name. Adding an engine is one package.
 
 ## The path of a search
 
-1. `index.search(text)` builds an immutable `AdapterSearchRequest`. Builder
-   methods copy the request and snapshot caller-owned filter and provider data.
-   Pagination travels as `page: { current, size }`, with one-based numbering.
-2. Both `key()` and `execute()` normalise the filter. Empty and single-child
-   groups collapse, nested groups flatten, constants are absorbed, and membership
-   operands are sorted and deduplicated. Every operand is validated, including
-   those after a constant that determines the result.
-3. `key()` combines the normalised request with the adapter fingerprint.
-   `execute()` instead checks disposal, empty-query policy, provider options and
-   capabilities before sending the request with its signal.
-4. The adapter translates the request into provider parameters and maps the
-   answer back to Scout's page, total, facet and highlight contracts. A
-   match-none filter can return `emptySearchResponse` without provider I/O.
-5. Core validates documents, derives ids and fills requested facet and highlight
-   fields omitted by the provider. Missing facets retain unknown exhaustiveness.
+1. `index.search(text)` builds an immutable description of the search. Builder
+   methods copy it and snapshot caller-owned filter and provider data. A page
+   or page size that cannot mean anything, and a reversed `between`, are
+   refused as they are called.
+2. Both `key()` and `execute()` resolve the description against the index: the
+   sort and profile names become their definitions, and the facet, highlight
+   and filter fields are checked against the declaration. The filter is
+   normalised, every operand and provider option must have a canonical form,
+   and no provider option may be one the adapter reserves because it writes it
+   itself. Anything wrong is a `"configuration"` error.
+3. `key()` combines the resolved request with the adapter fingerprint.
+   `execute()` instead checks disposal and the caller's signal, answers a
+   filter that can match nothing itself, and otherwise hands the request to the
+   adapter with a signal.
+4. The adapter translates the request into engine parameters, refusing what the
+   engine cannot express with `"unsupported-feature"` before it sends
+   anything, and maps the answer into hits, a total, facets and a time.
+5. The core validates documents and derives ids, decodes facet values to their
+   declared types, fills requested facet and highlight fields the engine left
+   out, and derives the page. A missing facet keeps unknown exhaustiveness.
 
 Key generation does not execute a search, and execution does not compute an
-unused key. Identity, provider translation and result mapping have separate tests.
+unused key. Identity, adapter translation and result mapping have separate
+tests.
 
 ## Cancellation and ownership
 
-`createSearchAdapter` rejects immediately for an already-aborted signal. It races
-pending provider work against abort and disposal, so the caller settles even if
-the SDK never does. Late provider failures remain observed. Transport cancellation
-can stop provider I/O; logical cancellation only stops Scout waiting.
+`executeSearch` refuses a search whose signal has already aborted, before the
+adapter is called. Otherwise it gives the adapter one signal that aborts when
+the caller's signal does or when the `Scout` is disposed, and races the
+adapter's answer against it, so the caller settles even if the SDK never does.
+An answer that arrives after either is refused, and a rejection caused by the
+abort is reported as the abort rather than as a provider failure. An adapter
+that passes the signal to its SDK stops the engine's work too; one that cannot
+only stops Scout waiting.
 
-`Scout` snapshots its index registry at construction. Replacing an entry in the
-caller's object cannot redirect searches or change which adapters are disposed.
-Each index captures its configuration at declaration, including default sort and
-profile names. The frozen declaration keeps search and cleanup on the same
-adapter. Schemas and injected clients are retained by reference, not deep-frozen.
-Cleanup visits every adapter even if one throws, then rethrows a single failure
-or aggregates several. Repeated disposal is safe. The application owns injected
-provider clients and must manage their lifetime.
+`Scout` copies its index and adapter maps at construction. Replacing an entry in
+the caller's object cannot redirect searches or change which adapters are
+disposed. Each declaration is frozen when it is made, and handles are cached and
+frozen. Schemas and injected clients are retained by reference, not
+deep-frozen. Disposal aborts every search in flight, then visits every adapter
+even if one throws, and rethrows a single failure or aggregates several.
+Repeated disposal is safe. The application owns injected clients and manages
+their lifetime.
 
 ## Invariants and the tests that guard them
 
-| Invariant                                                            | Test                                                                                                                             |
-| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| An adapter must cover every sort and profile its index declares      | `types.contracts.ts`: the stub adapter that declares no `priceAsc` sort                                                          |
-| A builder is immutable                                               | `Scout.test.ts`: the builder is immutable, so a stored search is never changed by a later one                                    |
-| Repeated `where` calls combine with AND                              | `Scout.test.ts`: repeated where calls combine with and                                                                           |
-| Two searches that mean the same thing share a key                    | `Scout.test.ts`: two searches that mean the same thing share a key, and a different one does not                                 |
-| Page size is part of identity                                        | `Scout.test.ts`: page size is part of the identity                                                                               |
-| A non-serialisable provider option is refused, never dropped         | `canonicalize.test.ts`: the seven refusal cases                                                                                  |
-| Values of different types never share an identity                    | `canonicalize.test.ts`: values of different types never share a canonical form                                                   |
-| An empty `in` matches nothing and an empty `notIn` restricts nothing | `normalizeFilter.test.ts`: an empty in matches nothing and an empty notIn restricts nothing                                      |
-| A constant decides or leaves its group                               | `normalizeFilter.test.ts`: a constant decides the group it can decide; a constant the group ignores disappears from it           |
-| Normalisation is idempotent                                          | `normalizeFilter.test.ts`: normalising an already normal tree changes nothing                                                    |
-| An unsupported feature is refused before dispatch                    | `Scout.test.ts`: a feature the adapter cannot translate is refused before anything is sent                                       |
-| A page above the engine's limit names the limit                      | `Scout.test.ts`: a page larger than the adapter allows is refused with the limit named                                           |
-| A provider option cannot overwrite a Scout owned field               | `Scout.test.ts`: a provider option that collides with a Scout owned field is refused                                             |
-| An invalid document fails the search, or is skipped and counted      | `Scout.test.ts`: a document that fails the schema fails the search by default; skip drops invalid documents and reports how many |
-| A requested facet or highlight is always present                     | `Scout.test.ts`: a requested facet the engine did not return is present and empty; hits carry the id the index derived           |
-| `took` prefers the provider's own measurement                        | `Scout.test.ts`: took reports the provider's own time when it gave one                                                           |
-| A disposed Scout refuses new searches and disposal repeats safely    | `Scout.test.ts`: a disposed Scout refuses new searches; disposal can be called twice                                             |
-| An answer after disposal is refused                                  | `createMockSearchAdapter.test.ts`: an answer arriving after disposal is refused rather than returned                             |
-| An abort rejection is a cancellation, not a provider failure         | `createMockSearchAdapter.test.ts`: an SDK rejection caused by the abort is reported as a cancellation                            |
-| A failure with no abort stays a provider failure                     | `createMockSearchAdapter.test.ts`: a rejection with no abort stays a provider failure and is not disguised                       |
-| Highlight parts rejoin to the original value                         | `testSearchAdapter.ts`: a requested highlight comes back as parts and never as markup                                            |
-| Every adapter satisfies the contract                                 | each adapter's `conformance.test.ts`                                                                                             |
+| Invariant                                                            | Test                                                                                                                                                              |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Every index has an adapter and every adapter an index                | `Scout.test.ts`: an index with no adapter is refused; an adapter that serves no index is refused                                                                  |
+| An adapter's own sort configuration covers every declared sort       | `Scout.test.ts`: an adapter that serves sorts through its own configuration covers every declared one; `types.contracts.ts`                                       |
+| A search reaches the adapter resolved against its index              | `resolveSearch.test.ts`: a search reaches the adapter resolved against its index                                                                                  |
+| A name the index never declared is refused before anything is sent   | `resolveSearch.test.ts`: the `test.each` of refusals, including a hand built filter on an undeclared field                                                        |
+| A builder is immutable                                               | `createSearchBuilder.test.ts`: the builder is immutable, so a stored search never changes                                                                         |
+| Repeated `where` calls combine with AND                              | `resolveSearch.test.ts`: repeated where calls combine with and                                                                                                    |
+| Two searches that mean the same thing share a key                    | `getSearchKey.test.ts`: two searches that mean the same thing share a key                                                                                         |
+| Everything that changes results is part of the key                   | `getSearchKey.test.ts`: the `test.each` over query, profile, sort, filter, facets, highlights, page, page size and provider options                               |
+| A contradiction and a tautology never share a key                    | `getSearchKey.test.ts`: a contradiction and a tautology have different keys                                                                                       |
+| A non-serialisable value is refused, never dropped                   | `canonicalize.test.ts`: the refusal cases                                                                                                                         |
+| Values of different types never share an identity                    | `canonicalize.test.ts`: values of different types never share a canonical form                                                                                    |
+| An empty `in` matches nothing and an empty `notIn` restricts nothing | `normalizeFilter.test.ts`: an empty in matches nothing and an empty notIn restricts nothing                                                                       |
+| A constant decides or leaves its group                               | `normalizeFilter.test.ts`: a constant decides the group it can decide; a constant the group ignores disappears from it                                            |
+| Normalisation is idempotent                                          | `normalizeFilter.test.ts`: normalising an already normal tree changes nothing                                                                                     |
+| A contradiction is answered without the engine                       | `executeSearch.test.ts`: a filter that can match nothing is answered without the engine                                                                           |
+| An adapter's refusal reaches the caller unchanged                    | `executeSearch.test.ts`: a refusal from the adapter reaches the caller unchanged                                                                                  |
+| An engine failure keeps its cause                                    | `executeSearch.test.ts`: an engine failure becomes a provider error that keeps the cause                                                                          |
+| An abort settles at once and a late answer is refused                | `executeSearch.test.ts`: an abort reaches the adapter's signal and settles without waiting for it; a late answer from an engine that ignored the abort is refused |
+| An abort rejection is a cancellation, not a provider failure         | `executeSearch.test.ts`: an engine rejection caused by the abort is reported as the abort                                                                         |
+| Disposal settles a search in flight and refuses its answer           | `executeSearch.test.ts`: disposal settles a search in flight without waiting for the engine; an answer arriving after disposal is refused                         |
+| The page is derived by the core                                      | `getSearchPage.test.ts`, every case                                                                                                                               |
+| An invalid document fails the search, or is skipped and counted      | `mapSearchResponse.test.ts`: a document the schema rejects fails the search; validate skip drops the document and counts it                                       |
+| Facet values arrive as the declared types                            | `mapSearchResponse.test.ts`: facet values are decoded to the type the index declared                                                                              |
+| A requested facet or highlight is always present                     | `mapSearchResponse.test.ts`: a requested facet the engine skipped comes back unknown; a valid hit carries every requested highlight                               |
+| `took` prefers the engine's own measurement                          | `executeSearch.test.ts`: took reports the engine's own time when it gave one                                                                                      |
+| Disposal disposes every adapter once and repeats safely              | `Scout.test.ts`: disposal disposes every adapter once, however often it is called                                                                                 |
+| Highlight parts never carry a marker                                 | `splitHighlight.test.ts`: no part ever carries a marker, so a document cannot render as markup                                                                    |
+| The core never names an engine                                       | `index.test.ts`: the core never names an engine                                                                                                                   |
+| Every adapter satisfies the contract                                 | each adapter's `conformance.test.ts`                                                                                                                              |
 
 Regression tests are checked against deliberately broken implementations.
-`scripts/mutate.mjs` additionally exercises silent failures in normalization,
-identity, highlights and response metadata.
+`scripts/mutate.mjs` breaks the core, the TanStack package, the reference
+adapter the conformance suite is checked against and the adapters on purpose,
+one change at a time, and fails when a break survives.

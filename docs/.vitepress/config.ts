@@ -3,14 +3,16 @@ import { defineConfig } from "vitepress";
 // Read from the environment so a fork, a preview deployment and the published
 // site build the same sources under different origins.
 const siteUrl = process.env["DOCS_SITE_URL"];
+
 const base =
   process.env["DOCS_BASE_PATH"] ??
   (siteUrl === undefined ? "/" : new URL(siteUrl).pathname);
 
 const description =
   "Typed, provider-independent search for TypeScript. One typed search over " +
-  "Typesense, Algolia, Meilisearch, Orama, MiniSearch or Fuse.js, with honest totals, " +
-  "safe highlights and deterministic query identity.";
+  "Typesense, Algolia, Meilisearch, MongoDB Search, Elasticsearch, OpenSearch, " +
+  "Orama, MiniSearch or Fuse.js, with honest totals, safe highlights and " +
+  "deterministic query identity.";
 
 export default defineConfig({
   base,
@@ -20,6 +22,13 @@ export default defineConfig({
   cleanUrls: true,
   lastUpdated: true,
   srcExclude: ["README.md"],
+  head: [
+    [
+      "link",
+      { rel: "icon", type: "image/svg+xml", href: `${base}favicon.svg` },
+    ],
+    ["meta", { name: "theme-color", content: "#b45309" }],
+  ],
   ...(siteUrl === undefined ? {} : { sitemap: { hostname: siteUrl } }),
   themeConfig: {
     nav: [
@@ -35,6 +44,7 @@ export default defineConfig({
           { text: "Getting started", link: "/getting-started" },
           { text: "Installation", link: "/installation" },
           { text: "Choose an adapter", link: "/adapters" },
+          { text: "Example application", link: "/examples" },
         ],
       },
       {

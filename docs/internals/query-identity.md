@@ -10,6 +10,7 @@ that differ in anything that changes results do not.
 
 ```ts
 const left = products.search("shoe").where((p) => p.brand.in(["Bose", "Sony"]));
+
 const right = products
   .search("shoe")
   .where((p) => p.brand.in(["Sony", "Bose"]));
@@ -40,58 +41,56 @@ page parameter and must not be part of the key. See
 
 ## What takes part
 
-The canonical request is built from exactly these, in a fixed order:
+The canonical request is built from the search after it was resolved against
+its index, so it holds what the adapter will receive rather than what was
+typed:
 
-| Value                    | Notes                                                           |
-| ------------------------ | --------------------------------------------------------------- |
-| the adapter fingerprint  | what changes results without being in the request               |
-| the index name           | the declared name, not the handle                               |
-| the query text           | exactly as passed, never trimmed                                |
-| the profile name         | the one selected, or the index's first declared profile         |
-| the sort name            | the one selected, or the index's first declared sort            |
-| the filter               | after normalisation, so equivalent filters collapse to one form |
-| the requested facets     | de-duplicated and sorted                                        |
-| the requested highlights | de-duplicated and sorted                                        |
-| the page number          | one-based                                                       |
-| the page size            | part of base identity, for normal and infinite queries alike    |
-| the provider options     | the whole payload, canonicalised like any other value           |
+| Value                    | Notes                                                                       |
+| ------------------------ | --------------------------------------------------------------------------- |
+| the adapter fingerprint  | what changes results without being in the request                           |
+| the query text           | exactly as passed, never trimmed, and empty to browse                       |
+| the searchable fields    | the ones the selected profile runs the query against                        |
+| the profile name         | the one selected, or `"default"`                                            |
+| the sort                 | its definition, the name and the fields it orders by, or none for relevance |
+| the filter               | normalised, so equivalent filters collapse to one form                      |
+| the requested facets     | de-duplicated and sorted                                                    |
+| the requested highlights | de-duplicated and sorted                                                    |
+| the page number          | one-based                                                                   |
+| the page size            | part of base identity, for normal and infinite queries alike                |
+| the provider options     | the whole payload, canonicalised like any other value                       |
 
-Two consequences worth naming. Repeating a facet costs the provider nothing but
-would change a naive key, so the requested set is de-duplicated and sorted
-before it gets here. And provider options are in, so two searches that differ
-only in a `.provider()` payload never share a cache entry, even when the option
-is something you believe does not change results.
+A few consequences worth naming. The sort's definition and the profile's fields
+are in, so a search over a declaration that changed never reuses a cache entry
+made before the change. The filter keeps its two constants, so a filter that
+matches nothing and one that restricts nothing, which both reach an adapter as
+no filter at all, never share an entry. Repeating a facet costs the engine
+nothing but would change a naive key, so the requested set is de-duplicated and
+sorted before it gets here. And provider options are in, so two searches that
+differ only in a `.provider()` payload never share a cache entry, even when the
+option is something you believe does not change results.
 
 ## The adapter fingerprint
 
 `fingerprint()` carries what changes the answer but is not part of the request.
-Each adapter contributes something different:
-
-| Adapter     | Fingerprint                                               |
-| ----------- | --------------------------------------------------------- |
-| Typesense   | the collection name                                       |
-| Algolia     | the primary index name plus every sort to replica mapping |
-| Meilisearch | the index uid                                             |
-| Orama       | `orama:` and the corpus revision you supply               |
-| MiniSearch  | `minisearch:` and the corpus revision you supply          |
-
-Algolia includes the replica mapping because the same sort name over a different
-replica is a different result set. The two local engines include a revision
-because a corpus changes in the same process with nothing in between to notice
-it, and Scout does not watch your database.
+Typesense reports its collection name. An engine that serves sorts from its own
+configuration includes that mapping, because the same sort name over a
+different replica is a different result set. A local engine includes a corpus
+revision the application supplies, because a corpus changes in the same process
+with nothing in between to notice it, and Scout does not watch your data.
+[Adapters](../adapters.md) says what each one reports.
 
 A fingerprint must never contain a credential. It reaches cache keys, logs and
 devtools. See [security](../security.md).
 
 ## What is deliberately left out
 
-- Credentials of any kind, including anything inside a provider client.
+- Credentials of any kind, including anything inside an injected client.
 - The adapter's name. Only its fingerprint takes part, so two different adapters
   that report the same fingerprint for the same index name would collide. Give
   each one a fingerprint that identifies its target.
 - The `AbortSignal`, because it changes nothing about what a search means.
-- The index's `validate` and `emptyQuery` settings and its schema. They are
-  properties of the index, and the index name is already in the key.
+- The index's `validate` setting and its schema. They decide how an answer is
+  read, not what is asked, and the index name is already in the key.
 - Anything about the answer: hit count, totals, timings, facet values.
 
 ## Canonicalisation rules
@@ -119,8 +118,9 @@ refused, because a hole in a sequence is not the same as a shorter sequence.
 
 ## Values with no canonical form
 
-These are refused with a `SearchConfigurationError` whose `path` names exactly
-where the offending value sat, for example `search.provider.transform`:
+These are refused with a `ScoutError` whose code is `"configuration"` and whose
+message names exactly where the offending value sat, for example
+`provider.transform`:
 
 `NaN`, an infinite number, a function, a symbol, `undefined`, an invalid `Date`,
 and any object that is not a plain object, which is reported by its constructor
@@ -136,9 +136,8 @@ it stands for into the adapter's fingerprint.
 ## Filter normalisation comes first
 
 The filter in the key is the normalised one, which is why
-`in(["Sony", "Bose"])` and `in(["Bose", "Sony"])` share a key, why `and(a)` and
-`a` share one, and why an empty `in([])` and an explicit contradiction share
-one. The full list of rewrites is in [filters](../filters.md).
+`in(["Sony", "Bose"])` and `in(["Bose", "Sony"])` share a key and why `and(a)`
+and `a` share one. The full list of rewrites is in [filters](../filters.md).
 
 ## When two keys are equal and should not be
 
@@ -147,19 +146,8 @@ cannot see:
 
 - a remote index that was reindexed, which is why a remote adapter has no
   revision and why `staleTime` and invalidation exist;
-- a local corpus that changed without its `revision` being bumped, which is the
+- a local corpus that changed without its revision being bumped, which is the
   one failure mode that looks like caching working perfectly and returning last
   week's answers;
 - a credential that changed while the index name stayed the same. Dispose the
   `Scout` and build a new one instead.
-
-## The low level entry point
-
-```ts
-import { searchKey } from "@priemskiyyy/scout";
-```
-
-`searchKey(request, fingerprint)` is what `key()` calls. It takes an
-`AdapterSearchRequest`, which is the shape an adapter receives, so it is useful
-inside an adapter, a test or a devtool that already holds one. In application
-code, call `search.key()` and let the builder assemble the request.
