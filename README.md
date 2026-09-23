@@ -3,7 +3,7 @@
 **Typed, provider-independent search for TypeScript.**
 
 Write one typed search and run it against Algolia, Meilisearch, Typesense,
-Orama, MiniSearch or Fuse.js. Scout normalizes the part of application search that is
+MongoDB Search, Elasticsearch, OpenSearch, Orama, MiniSearch or Fuse.js. Scout normalizes the part of application search that is
 genuinely portable: typed indexes, a typed filter builder, named search and sort
 profiles, pagination, facets, safe highlights and deterministic query identity.
 
@@ -31,24 +31,19 @@ const Product = z.object({
   inStock: z.boolean(),
 });
 
+const products = index({
+  schema: Product,
+  id: (product) => product.id,
+  searchable: ["name", "brand"],
+  filterable: ["brand", "price", "inStock"],
+  facetable: { brand: "string" },
+  highlightable: ["name"],
+  sorts: { priceAsc: { price: "asc" } },
+});
+
 const scout = new Scout({
-  indexes: {
-    products: index({
-      schema: Product,
-      id: (product) => product.id,
-      filterable: ["brand", "price", "inStock"],
-      facetable: ["brand"],
-      highlightable: ["name"],
-      sorts: ["relevance", "priceAsc"],
-      profiles: ["default"],
-      adapter: typesense({
-        client,
-        collection: "products",
-        profiles: { default: { queryBy: ["name"] } },
-        sorts: { relevance: {}, priceAsc: { sortBy: "price:asc" } },
-      }),
-    }),
-  },
+  indexes: { products },
+  adapters: { products: typesense({ client, collection: "products" }) },
 });
 
 const result = await scout
@@ -63,14 +58,14 @@ const result = await scout
   )
   .sort("priceAsc")
   .facets("brand")
-  .pageSize(20)
+  .page({ size: 20 })
   .execute();
 ```
 
 `product.price.lte(300)` exists because `price` is a number in the schema and
 was declared filterable. `product.brand.between(...)` does not exist, because
 `between` on a string has no portable meaning. `.sort("priceDesc")` does not
-exist, because the index never declared it.
+exist, because the index never declared it. An empty query browses.
 
 ## Three things that make it different
 
@@ -86,20 +81,21 @@ engine actually reported: Algolia's `exhaustive.nbHits`, Typesense's
 wrappers throw this away and show you a number. Scout keeps it, so you can
 render "About 1,249" when that is the truth.
 
-**It refuses instead of degrading.** An engine that cannot express a filter you
-asked for throws before anything is sent:
+**It refuses instead of degrading.** An engine that cannot do what you asked
+refuses before anything is sent:
 
 ```ts
-// UnsupportedSearchFeatureError: the minisearch adapter does not report facets.
+// ScoutError { code: "unsupported-feature" }: MiniSearch has no facet index.
 ```
 
 No adapter is allowed to filter or sort the page it got back to fake a feature
 it does not have. That produces results that look right and are not.
 
-**Swapping engines is a compile error, not a runtime surprise.** An index
-declares its sort and profile names, and the adapter is required to cover them.
-Change provider and forget a sort, and the error lands in the adapter
-configuration where the migration work belongs, never at a call site.
+**Swapping engines swaps one adapter.** The index declares everything a search
+can use, its fields, its sorts and its profiles, and names no engine. Binding
+another engine replaces one line under `adapters`, and an engine that needs
+configuration for a declared sort, such as an Algolia replica, fails to compile
+without it.
 
 ## With TanStack Query
 
@@ -114,7 +110,7 @@ import {
   flattenHits,
 } from "@priemskiyyy/scout-tanstack-query";
 
-const search = scout.index("products").search(text).pageSize(20);
+const search = scout.index("products").search(text).page({ size: 20 });
 
 useQuery(queryOptions(search));
 useInfiniteQuery(infiniteQueryOptions(search));
@@ -126,27 +122,29 @@ storage. Scout sets none of those defaults for you.
 
 ## Adapters
 
-| Package                          | Engine                 | Cancellation | Highlights         | Facets       |
-| -------------------------------- | ---------------------- | ------------ | ------------------ | ------------ |
-| `@priemskiyyy/scout-typesense`   | Typesense              | transport    | parts              | yes          |
-| `@priemskiyyy/scout-algolia`     | Algolia                | logical      | parts              | yes          |
-| `@priemskiyyy/scout-meilisearch` | Meilisearch            | transport    | parts              | yes          |
-| `@priemskiyyy/scout-orama`       | Orama, in process      | logical      | none               | yes          |
-| `@priemskiyyy/scout-minisearch`  | MiniSearch, in process | logical      | none               | no           |
-| `@priemskiyyy/scout-fuse`        | Fuse.js, in process    | logical      | parts when enabled | no           |
-| `@priemskiyyy/scout-http`        | your own JSON endpoint | transport    | your mapping       | your mapping |
+| Package                            | Engine                      | Refuses                                                                  |
+| ---------------------------------- | --------------------------- | ------------------------------------------------------------------------ |
+| `@priemskiyyy/scout-typesense`     | Typesense                   | pages over 250, sorts by more than three fields                          |
+| `@priemskiyyy/scout-algolia`       | Algolia                     | pages over 1000, filters its boolean grammar rejects                     |
+| `@priemskiyyy/scout-meilisearch`   | Meilisearch                 | pages over `maxTotalHits`                                                |
+| `@priemskiyyy/scout-mongodb`       | MongoDB Search, server only | string filters and facets off a `token` field, number and boolean facets |
+| `@priemskiyyy/scout-elasticsearch` | Elasticsearch, server only  | pages past `max_result_window`                                           |
+| `@priemskiyyy/scout-opensearch`    | OpenSearch, server only     | pages past `max_result_window`                                           |
+| `@priemskiyyy/scout-orama`         | Orama, in process           | highlights, number facets, sorts by several fields                       |
+| `@priemskiyyy/scout-minisearch`    | MiniSearch, in process      | facets and highlights                                                    |
+| `@priemskiyyy/scout-fuse`          | Fuse.js, in process         | facets, and highlights without `includeMatches`                          |
+| `@priemskiyyy/scout-http`          | your own JSON endpoint      | whatever your backend refuses                                            |
 
-The HTTP adapter owns the plumbing every backend needs, which is `fetch`, the
-abort signal, status and parse failures, and a fingerprint with the credentials
-stripped out. Your application owns what only it can know: the request and
-response mapping, and its own capability declaration, because only you know what
-your backend can do. A `scoutWire` request and response pair ships alongside for
-anyone who controls both ends, which puts a whole adapter at about twenty lines
-without imposing a wire format on anyone who does not.
+The HTTP adapter takes your own client, the way Flare's does: you give it one
+`request` function that sends the portable search with the address,
+authentication and headers your client already owns, and resolves with your
+backend's answer in the scout wire format. A backend refuses a feature with a
+small refusal body.
 
-`logical` means aborting stops Scout waiting but the engine may still be running
-and still billing, because its SDK takes no `AbortSignal`. That is a fact about
-the client, not a shortcut, and it is why the capability exists.
+An aborted search settles at once on every engine. Typesense, Meilisearch,
+MongoDB, Elasticsearch and OpenSearch also stop the request on the wire, and so
+does HTTP when your client passes the signal on; Algolia's client takes no
+signal, so an aborted Algolia search may still run and still bill.
 
 Writing your own is first class: see `docs/writing-an-adapter.md`.
 
