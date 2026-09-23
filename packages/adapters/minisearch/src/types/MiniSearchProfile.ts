@@ -1,17 +1,17 @@
 import type { MiniSearchCombineWith } from "src/types/MiniSearchCombineWith";
 
 /**
- * MiniSearch query options for a named profile. Filtering belongs to Scout's
- * portable AST; tokenization and term processing belong to the index.
+ * How MiniSearch tunes one of the index's profiles, or one search through
+ * `.provider()`. The fields a search reads come from the index, and the filter
+ * from Scout.
  *
  * @example
  * ```ts
- * const forgiving: MiniSearchProfile = { fields: ["name"], prefix: true, fuzzy: 0.2 };
+ * const forgiving: MiniSearchProfile = { prefix: true, fuzzy: 0.2 };
  * ```
  * @see [minisearch adapter](https://priemskiyyy.github.io/scout/adapters.html#minisearch)
  */
 export type MiniSearchProfile = {
-  fields?: string[];
   boost?: { [field: string]: number };
   weights?: { fuzzy: number; prefix: number };
   prefix?:
