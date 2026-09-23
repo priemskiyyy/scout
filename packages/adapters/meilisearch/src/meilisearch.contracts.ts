@@ -7,7 +7,7 @@ import type {
   SearchResponse,
 } from "meilisearch";
 import { expectTypeOf } from "vitest";
-import { meilisearch } from "src/meilisearch";
+
 import type { MeilisearchIndexClient } from "src/types/MeilisearchIndexClient";
 import type { MeilisearchSearchHit } from "src/types/MeilisearchSearchHit";
 import type { MeilisearchSearchOptions } from "src/types/MeilisearchSearchOptions";
@@ -42,8 +42,7 @@ expectTypeOf<Hit<RecordAny>>().toExtend<MeilisearchSearchHit>();
 
 /**
  * `ExtraRequestInit` is `Omit<RequestInit, "body" | "method">`, so `signal`
- * survives into the third argument. That is what makes this adapter's
- * `cancellation: "transport"` true rather than aspirational.
+ * survives into the third argument and a search is cancelled on the wire.
  */
 expectTypeOf<ExtraRequestInit>().toExtend<{ signal?: AbortSignal | null }>();
 
@@ -70,26 +69,14 @@ acceptOptions({
   filter: 'brand = "Apex"',
 });
 
+acceptOptions({
+  // @ts-expect-error The fields a search runs against come from the index's profile, never from an option.
+  attributesToSearchOn: ["title"],
+});
+
 expectTypeOf<
   SearchResponse<RecordAny, { offset: number; limit: number }>
 >().toHaveProperty(
   // @ts-expect-error Offset pagination reports estimatedTotalHits and never the exhaustive totalHits.
   "totalHits",
 );
-
-const adapter = meilisearch({
-  index: { uid: "products", search: () => Promise.resolve({ hits: [] }) },
-  profiles: { default: {} },
-  sorts: { relevance: {} },
-});
-
-/** The configured names survive, so an index can require coverage of them. */
-expectTypeOf(adapter).toExtend<{
-  profiles: Readonly<Record<"default", unknown>>;
-  sorts: Readonly<Record<"relevance", unknown>>;
-}>();
-
-// @ts-expect-error This adapter was given no sort named cheapest, so an index that declares one cannot take it.
-expectTypeOf(adapter).toExtend<{
-  sorts: Readonly<Record<"cheapest", unknown>>;
-}>();

@@ -1,18 +1,26 @@
+import { index } from "@priemskiyyy/scout";
+import type { StandardSchema } from "@priemskiyyy/scout";
+
 import type { MeilisearchIndexClient } from "src/types/MeilisearchIndexClient";
 import type { MeilisearchSearchHit } from "src/types/MeilisearchSearchHit";
 import type { MeilisearchSearchParams } from "src/types/MeilisearchSearchParams";
 import type { MeilisearchSearchResponse } from "src/types/MeilisearchSearchResponse";
 
-/**
- * One document in the fake's corpus. The index signature is what lets the fake
- * read a field it was handed at runtime, the way Meilisearch does.
- */
-export type MeilisearchFakeProduct = {
+/** One document in the fake's corpus, as the index declares it. */
+export type MeilisearchFakeDocument = {
   id: string;
   title: string;
   brand: string;
   price: number;
+  inStock: boolean;
   tags: string[];
+};
+
+/**
+ * The index signature is what lets the fake read a field it was handed at
+ * runtime, the way Meilisearch does.
+ */
+export type MeilisearchFakeProduct = MeilisearchFakeDocument & {
   [field: string]: unknown;
 };
 
@@ -45,6 +53,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "Trail running shoe",
     brand: "Apex",
     price: 120,
+    inStock: true,
     tags: ["running", "trail"],
   },
   {
@@ -52,6 +61,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "Road running shoe",
     brand: "Apex",
     price: 90,
+    inStock: false,
     tags: ["running", "road"],
   },
   {
@@ -59,6 +69,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "Climbing shoe",
     brand: "Vertex",
     price: 150,
+    inStock: true,
     tags: ["climbing"],
   },
   {
@@ -68,6 +79,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "Café Zürich 日本語 🚀 shoe",
     brand: "Vertex",
     price: 60,
+    inStock: true,
     tags: ["café", "🚀 rocket"],
   },
   {
@@ -76,6 +88,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "[scout:forged]injected[/scout:forged] shoe",
     brand: "Forge",
     price: 45,
+    inStock: false,
     tags: ["forged"],
   },
   {
@@ -83,6 +96,7 @@ const PRODUCTS: readonly MeilisearchFakeProduct[] = [
     title: "Wool sock",
     brand: "Apex",
     price: 20,
+    inStock: true,
     tags: ["wool"],
   },
 ];
@@ -93,9 +107,11 @@ const textOf = (value: unknown): readonly string[] => {
   if (typeof value === "string") {
     return [value];
   }
+
   if (Array.isArray(value)) {
     return value.flatMap((entry) => (typeof entry === "string" ? [entry] : []));
   }
+
   return [];
 };
 
@@ -107,7 +123,9 @@ const matchesQuery = (
   if (query.length === 0) {
     return true;
   }
+
   const needle = query.toLowerCase();
+
   return fields.some((field) =>
     textOf(document[field]).some((text) => text.toLowerCase().includes(needle)),
   );
@@ -126,6 +144,7 @@ const highlight = (
   if (query.length === 0) {
     return value;
   }
+
   // ponytail: lower casing is length preserving for everything in this corpus.
   // A few code points grow when lower cased, and a real index would need
   // locale aware folding here.
@@ -133,16 +152,21 @@ const highlight = (
   const needle = query.toLowerCase();
   let result = "";
   let cursor = 0;
+
   while (cursor <= value.length) {
     const found = haystack.indexOf(needle, cursor);
+
     if (found === -1) {
       result += value.slice(cursor);
       break;
     }
+
     const end = found + needle.length;
+
     result += `${value.slice(cursor, found)}${open}${value.slice(found, end)}${close}`;
     cursor = end;
   }
+
   return result;
 };
 
@@ -155,9 +179,11 @@ const formatValue = (
   if (typeof value === "string") {
     return highlight(value, query, open, close);
   }
+
   if (Array.isArray(value)) {
     return value.map((entry) => formatValue(entry, query, open, close));
   }
+
   return value;
 };
 
@@ -167,11 +193,14 @@ const buildFormatted = (
   params: MeilisearchSearchParams,
 ): Record<string, unknown> | undefined => {
   const fields = params.attributesToHighlight;
+
   if (fields === undefined || fields.length === 0) {
     return undefined;
   }
+
   const open = params.highlightPreTag ?? "<em>";
   const close = params.highlightPostTag ?? "</em>";
+
   // Meilisearch formats every displayed attribute and highlights the requested
   // ones. The fake only formats the requested ones, which is all an adapter
   // that keys highlights by requested field ever reads.
@@ -188,17 +217,22 @@ const countValues = (
   field: string,
 ) => {
   const counts: Record<string, number> = {};
+
   for (const document of documents) {
     const value = document[field];
     const entries = Array.isArray(value) ? value : [value];
+
     for (const entry of entries) {
       if (entry === null || entry === undefined) {
         continue;
       }
+
       const key = `${entry}`;
+
       counts[key] = (counts[key] ?? 0) + 1;
     }
   }
+
   return counts;
 };
 
@@ -208,6 +242,7 @@ const numbersOf = (
 ) =>
   documents.flatMap((document) => {
     const value = document[field];
+
     return typeof value === "number" ? [value] : [];
   });
 
@@ -216,9 +251,11 @@ const statsFor = (
   field: string,
 ): readonly (readonly [string, { min: number; max: number }])[] => {
   const numbers = numbersOf(documents, field);
+
   if (numbers.length === 0) {
     return [];
   }
+
   return [[field, { min: Math.min(...numbers), max: Math.max(...numbers) }]];
 };
 
@@ -229,7 +266,9 @@ const buildFacets = (
   if (fields === undefined || fields.length === 0) {
     return {};
   }
+
   const stats = fields.flatMap((field) => statsFor(documents, field));
+
   return {
     facetDistribution: Object.fromEntries(
       fields.map((field) => [field, countValues(documents, field)]),
@@ -244,10 +283,12 @@ const paginate = (
   maxTotalHits: number,
 ) => {
   const reachable = Math.min(matched.length, maxTotalHits);
+
   if (params.page !== undefined || params.hitsPerPage !== undefined) {
     const page = params.page ?? 1;
     const hitsPerPage = params.hitsPerPage ?? 20;
     const start = (page - 1) * hitsPerPage;
+
     return {
       documents: matched.slice(start, Math.min(start + hitsPerPage, reachable)),
       pagination: {
@@ -258,8 +299,10 @@ const paginate = (
       },
     };
   }
+
   const offset = params.offset ?? 0;
   const limit = params.limit ?? 20;
+
   return {
     documents: matched.slice(offset, Math.min(offset + limit, reachable)),
     pagination: { offset, limit, estimatedTotalHits: reachable },
@@ -278,7 +321,7 @@ const paginate = (
  * @example
  * ```ts
  * const fake = createMeilisearchFake();
- * const adapter = meilisearch({ index: fake.index, profiles: {}, sorts: {} });
+ * const adapter = meilisearch({ index: fake.index });
  * expect(fake.calls[0]?.params?.filter).toBe('brand = "Apex"');
  * ```
  */
@@ -295,24 +338,32 @@ export const createMeilisearchFake = (
     uid: options.uid ?? "products",
     search: async (query, params, extraRequestInit) => {
       const signal = extraRequestInit?.signal ?? null;
+
       calls.push({ query, params, signal });
+
       if (signal?.aborted === true) {
         throw new Error("The fake meilisearch request was aborted.");
       }
+
       const request: MeilisearchSearchParams = params ?? {};
       const text = typeof query === "string" ? query : "";
       const fields = request.attributesToSearchOn ?? searchable;
+
       const matched = documents.filter((document) =>
         matchesQuery(document, text, fields),
       );
+
       const page = paginate(matched, request, maxTotalHits);
+
       const hits: MeilisearchSearchHit[] = page.documents.map((document) => {
         const formatted = buildFormatted(document, text, request);
+
         return {
           ...document,
           ...(formatted === undefined ? {} : { _formatted: formatted }),
         };
       });
+
       const response: MeilisearchSearchResponse = {
         hits,
         processingTimeMs,
@@ -320,9 +371,47 @@ export const createMeilisearchFake = (
         ...page.pagination,
         ...buildFacets(matched, request.facets),
       };
+
       return response;
     },
   };
 
   return { index, calls, documents };
 };
+
+const isProduct = (value: unknown): value is MeilisearchFakeDocument =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "id")?.value === "string";
+
+/** Reads a fake document back as the product it is. */
+export const productSchema: StandardSchema<MeilisearchFakeDocument> = {
+  "~standard": {
+    version: 1,
+    vendor: "meilisearch-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/** The fake corpus as an index declares it. */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["title", "brand", "tags"],
+  filterable: ["brand", "price", "inStock", "tags"],
+  facetable: {
+    brand: "string",
+    price: "number",
+    inStock: "boolean",
+    tags: "string",
+  },
+  highlightable: ["title", "tags"],
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { titles: { searchable: ["title"] } },
+});
