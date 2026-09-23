@@ -1,7 +1,7 @@
 /**
  * Per request options Algolia accepts. There is no `signal` here, because
- * `@algolia/client-common` has no `AbortSignal` support at all, which is why
- * this adapter declares `cancellation: "logical"`.
+ * `@algolia/client-common` has no `AbortSignal` support at all, so an aborted
+ * search stops Scout waiting while Algolia still answers it.
  *
  * @example
  * ```ts

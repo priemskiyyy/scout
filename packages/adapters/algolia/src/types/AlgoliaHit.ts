@@ -1,4 +1,5 @@
 import type { AlgoliaDocument } from "src/types/AlgoliaDocument";
+import type { AlgoliaHighlightResult } from "src/types/AlgoliaHighlightResult";
 
 /**
  * One hit with the metadata Algolia adds to it. Scout hands this whole object
@@ -12,5 +13,6 @@ import type { AlgoliaDocument } from "src/types/AlgoliaDocument";
  */
 export type AlgoliaHit = AlgoliaDocument & {
   objectID: string;
-  _highlightResult?: Readonly<Record<string, unknown>> | undefined;
+  _highlightResult?:
+    Readonly<Record<string, AlgoliaHighlightResult>> | undefined;
 };

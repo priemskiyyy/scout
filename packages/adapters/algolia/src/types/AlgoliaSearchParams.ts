@@ -1,6 +1,6 @@
 /**
  * The search parameters this adapter sends. The named fields are the ones it
- * owns, and the index signature is what carries an application's own parameters
+ * writes, and the index signature carries an application's own parameters
  * from `.provider()` and from a profile.
  *
  * @example
@@ -15,6 +15,7 @@ export type AlgoliaSearchParams = {
   page?: number | undefined;
   hitsPerPage?: number | undefined;
   facets?: string[] | undefined;
+  restrictSearchableAttributes?: string[] | undefined;
   attributesToHighlight?: string[] | undefined;
   highlightPreTag?: string | undefined;
   highlightPostTag?: string | undefined;
