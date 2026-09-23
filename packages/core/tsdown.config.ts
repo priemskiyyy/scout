@@ -1,7 +1,7 @@
 import { defineConfig } from "tsdown";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/mock.ts", "src/testing.ts"],
+  entry: ["src/index.ts", "src/adapter.ts", "src/mock.ts", "src/testing.ts"],
   format: ["esm"],
   target: "es2022",
   platform: "neutral",
