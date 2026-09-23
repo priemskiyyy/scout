@@ -1,28 +1,23 @@
 import { testSearchAdapter } from "@priemskiyyy/scout/testing";
-import { typesense } from "src/typesense";
-import { createTypesenseFake } from "src/typesense.fixture";
 
+import { typesense } from "src/typesense";
+import { createTypesenseFake, productIndex } from "src/typesense.fixture";
+
+// The fake evaluates the query and the page but not filter_by or sort_by, so
+// the suite checks those translate or refuse, and typesense.test.ts pins what
+// they translate to.
 testSearchAdapter({
   name: "typesense",
+  index: productIndex,
   createAdapter: () =>
     typesense({
       client: createTypesenseFake().client,
       collection: "products",
-      profiles: {
-        default: { queryBy: ["name", "brand", "tags"], prefix: true },
-        exact: { queryBy: ["name"], prefix: false },
-      },
-      sorts: { relevance: {}, priceAsc: { sortBy: "price:asc" } },
-      facets: { price: "number", inStock: "boolean" },
+      profiles: { exact: { prefix: false } },
     }),
   fixtures: {
-    index: "products",
     query: "shoe",
-    sort: "relevance",
-    profile: "default",
     equality: { field: "brand", value: "Nimbus" },
     range: { field: "price", min: 100, max: 200 },
-    facet: "brand",
-    highlight: "name",
   },
 });

@@ -1,7 +1,7 @@
 {
   "name": "@priemskiyyy/scout-typesense",
   "version": "0.1.0",
-  "description": "Typesense adapter for Scout: filter_by translation, marker highlights parsed into safe parts, honest totals and facet exhaustiveness, and a transport level abort.",
+  "description": "Typesense adapter for Scout: exact filter_by translation, per search highlight markers parsed into safe parts, honest totals and facet exhaustiveness, and cancellation on the wire.",
   "type": "module",
   "license": "MIT",
   "repository": {

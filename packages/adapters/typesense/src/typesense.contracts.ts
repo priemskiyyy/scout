@@ -53,7 +53,7 @@ expectTypeOf<RealHit>().toExtend<TypesenseHit>();
 expectTypeOf<RealFacetCounts>().toExtend<TypesenseFacetCounts>();
 expectTypeOf<RealHighlight>().toExtend<TypesenseHighlight>();
 
-// `abortSignal` is why this adapter declares `cancellation: "transport"`.
+// `abortSignal` is how a search is cancelled on the wire.
 expectTypeOf<SearchOptions["abortSignal"]>().toExtend<
   AbortSignal | null | undefined
 >();
@@ -80,8 +80,8 @@ expectTypeOf<TypesenseFakeHit>().toExtend<RealHit>();
 // @ts-expect-error the structural response is a subset of the SDK's, which also requires out_of, search_time_ms and request_params.
 expectTypeOf<TypesenseSearchResponse>().toExtend<RealResponse>();
 
-// A facet value arrives as a string even for a numeric field, which is the
-// whole reason the adapter takes a coercion hint per field.
+// A facet value arrives as a string even for a numeric field, which is why
+// the core decodes it by the type the index declared.
 // @ts-expect-error a Typesense facet value is a string on the wire even when the field is numeric.
 expectTypeOf<RealFacetCounts["counts"][number]["value"]>().toExtend<number>();
 
