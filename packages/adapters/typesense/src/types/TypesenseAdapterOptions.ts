@@ -1,32 +1,21 @@
-import type { TypesenseSearchClient } from "src/types/TypesenseSearchClient";
 import type { TypesenseProfile } from "src/types/TypesenseProfile";
-import type { TypesenseSort } from "src/types/TypesenseSort";
-import type { TypesenseFacetType } from "src/types/TypesenseFacetType";
+import type { TypesenseSearchClient } from "src/types/TypesenseSearchClient";
 
 /**
- * Configures the collection, named profiles and sorts on a borrowed Typesense client.
+ * The collection to search on a Typesense client the application owns.
  *
  * @example
  * ```ts
- * const options: TypesenseAdapterOptions<"relevance", "default"> = {
- *   client, collection: "products", profiles: { default: { queryBy: ["name"] } },
- *   sorts: { relevance: {} }, facets: { price: "number" },
+ * const options: TypesenseAdapterOptions = {
+ *   client, collection: "products", profiles: { exact: { prefix: false } },
  * };
  * ```
  * @see [typesense adapter](https://priemskiyyy.github.io/scout/adapters.html#typesense)
  */
-export type TypesenseAdapterOptions<
-  TSortName extends string,
-  TProfileName extends string,
-> = {
+export type TypesenseAdapterOptions = {
   /** The client the application owns. The adapter never closes it. */
   client: TypesenseSearchClient;
   collection: string;
-  profiles: Readonly<Record<TProfileName, TypesenseProfile>>;
-  sorts: Readonly<Record<TSortName, TypesenseSort>>;
-  /**
-   * The declared type of each facetable field. Typesense reports every facet
-   * value as a string, so a field left out arrives as the string it came as.
-   */
-  facets?: Readonly<Record<string, TypesenseFacetType>>;
+  /** Tuning for the index's profiles, keyed by profile name. */
+  profiles?: Readonly<Record<string, TypesenseProfile>>;
 };
