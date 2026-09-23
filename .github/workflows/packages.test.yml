@@ -61,5 +61,6 @@ jobs:
       - name: Mutation tests
         run: pnpm test:mutation
 
-      - name: Build example
-        run: pnpm -r --filter './examples/*' build
+      # Expo bundles for three platforms, which check:release does instead.
+      - name: Build examples
+        run: pnpm -r --filter './examples/*' --filter '!example-expo' build

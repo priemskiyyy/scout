@@ -1,0 +1,50 @@
+name: packages-backends
+
+on:
+  workflow_call:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "packages/core/src/**"
+      - "packages/internal/**"
+      - "packages/adapters/**"
+      - "scripts/backends/**"
+      - "scripts/test-backends.mjs"
+      - "vitest.backends.config.ts"
+  push:
+    branches:
+      - "main"
+    paths:
+      - "packages/core/src/**"
+      - "packages/internal/**"
+      - "packages/adapters/**"
+      - "scripts/backends/**"
+      - "scripts/test-backends.mjs"
+      - "vitest.backends.config.ts"
+
+permissions:
+  contents: read
+
+env:
+  TZ: UTC
+
+jobs:
+  # Every remote adapter against the real engine it translates for, started
+  # from its official image. Algolia is hosted only and has no image, so it is
+  # not here, and the in-process engines are real in every unit run already.
+  backends:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup workspace
+        uses: ./.github/actions/setup
+
+      - name: Build packages
+        run: pnpm build
+
+      - name: Real backend tests
+        run: pnpm test:backends
