@@ -1,16 +1,14 @@
 /**
- * One named search profile: which properties Orama reads and how forgiving the
- * match is. Everything here changes which documents match or in what order,
- * which is what a profile name stands for.
+ * How Orama tunes one of the index's profiles. The properties a profile
+ * searches come from the index.
  *
  * @example
  * ```ts
- * const profile: OramaSearchProfile = { properties: ["name"], tolerance: 1 };
+ * const forgiving: OramaSearchProfile = { tolerance: 2 };
  * ```
  * @see [orama adapter](https://priemskiyyy.github.io/scout/adapters.html#orama)
  */
 export type OramaSearchProfile = {
-  properties?: readonly string[];
   boost?: Readonly<Record<string, number>>;
   tolerance?: number;
   threshold?: number;

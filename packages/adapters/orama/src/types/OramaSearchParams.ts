@@ -6,9 +6,8 @@
  * Orama types `where`, `facets`, `sortBy` and `boost` against the schema of the
  * database being searched, so no schema independent declaration of them is
  * assignable to Orama's own. They are `unknown` here so that Orama's `search`
- * is accepted as it is, and the adapter builds each of them as `OramaWhere`,
- * `OramaFacetDefinition` and `OramaSearchSort` before it widens them.
- * `orama.contracts.ts` pins those shapes against the real Orama types.
+ * is accepted as it is. `orama.contracts.ts` pins the shapes the adapter
+ * builds against the real Orama types.
  *
  * @example
  * ```ts
