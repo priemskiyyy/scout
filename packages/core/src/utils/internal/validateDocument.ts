@@ -9,10 +9,12 @@ export const validateDocument = <TDocument>(
   document: unknown,
 ) => {
   const answer = schema["~standard"].validate(document);
+
   if (answer instanceof Promise) {
     // The schema is refused synchronously, but its later rejection still needs
     // an observer so validation cannot cause an unhandled process error.
     answer.catch(() => undefined);
+
     return {
       issues: [
         {
@@ -22,5 +24,6 @@ export const validateDocument = <TDocument>(
       ],
     };
   }
+
   return answer;
 };

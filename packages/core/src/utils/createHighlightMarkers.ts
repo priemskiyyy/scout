@@ -4,12 +4,14 @@ import type { HighlightMarkers } from "src/types/HighlightMarkers";
 // two `Math.random` draws instead of a crash. Neither draw is a cryptographic
 // guarantee and neither has to be: the pair only has to be something a corpus
 // could not have been written to contain.
-const randomToken = (): string => {
+const getRandomToken = (): string => {
   if (typeof globalThis.crypto?.randomUUID === "function") {
     return globalThis.crypto.randomUUID();
   }
+
   const first = Math.random().toString(36).slice(2);
   const second = Math.random().toString(36).slice(2);
+
   return `${first}${second}`;
 };
 
@@ -35,6 +37,7 @@ const randomToken = (): string => {
  * ```
  */
 export const createHighlightMarkers = (label = "scout"): HighlightMarkers => {
-  const token = randomToken();
+  const token = getRandomToken();
+
   return { open: `[${label}:${token}]`, close: `[/${label}:${token}]` };
 };

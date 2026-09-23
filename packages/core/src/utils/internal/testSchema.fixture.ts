@@ -13,7 +13,9 @@ const isProduct = (value: unknown): value is Product => {
   if (value === null || typeof value !== "object") {
     return false;
   }
+
   const record: Record<string, unknown> = { ...value };
+
   return (
     typeof record["id"] === "string" &&
     typeof record["name"] === "string" &&

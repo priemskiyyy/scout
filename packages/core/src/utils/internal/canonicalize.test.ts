@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
-import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
 import { canonicalize } from "src/utils/internal/canonicalize";
+
+const CONFIGURATION = expect.objectContaining({ code: "configuration" });
 
 test("key order does not change the identity", () => {
   expect(canonicalize({ b: 1, a: 2 }, "p")).toBe(
@@ -58,7 +59,7 @@ for (const [what, value] of unserialisable) {
   test(`${what} is refused rather than dropped, naming the path`, () => {
     const call = () => canonicalize({ nested: value }, "provider");
 
-    expect(call).toThrowError(SearchConfigurationError);
+    expect(call).toThrowError(CONFIGURATION);
     expect(call).toThrowError(/provider\.nested/);
   });
 }
@@ -68,12 +69,8 @@ for (const [what, value] of unserialisable) {
 // sequence, so it is refused.
 test("an undefined member is omitted, while an undefined element is refused", () => {
   expect(canonicalize({ a: undefined }, "p")).toBe("{}");
-  expect(() => canonicalize([undefined], "p")).toThrowError(
-    SearchConfigurationError,
-  );
-  expect(() => canonicalize(undefined, "p")).toThrowError(
-    SearchConfigurationError,
-  );
+  expect(() => canonicalize([undefined], "p")).toThrowError(CONFIGURATION);
+  expect(() => canonicalize(undefined, "p")).toThrowError(CONFIGURATION);
 });
 
 test("a refusal names the position inside an array", () => {
@@ -84,17 +81,16 @@ test("a refusal names the position inside an array", () => {
 
 test("a sparse array cannot collide with an empty array", () => {
   expect(() => canonicalize(new Array(1), "provider")).toThrowError(
-    SearchConfigurationError,
+    CONFIGURATION,
   );
 });
 
 test("a cyclic option is refused with its path instead of overflowing the stack", () => {
   const value: Record<string, unknown> = {};
+
   value.self = value;
 
-  expect(() => canonicalize(value, "provider")).toThrowError(
-    SearchConfigurationError,
-  );
+  expect(() => canonicalize(value, "provider")).toThrowError(CONFIGURATION);
   expect(() => canonicalize(value, "provider")).toThrowError("provider.self");
 });
 
@@ -104,9 +100,7 @@ test("a cyclic option is refused with its path instead of overflowing the stack"
 test("an object with no constructor to name is still refused with an explanation", () => {
   const exotic = Object.create(Object.create(null));
 
-  expect(() => canonicalize(exotic, "provider")).toThrowError(
-    SearchConfigurationError,
-  );
+  expect(() => canonicalize(exotic, "provider")).toThrowError(CONFIGURATION);
   expect(() => canonicalize(exotic, "provider")).toThrowError(
     "provider is an instance of an unnamed type",
   );

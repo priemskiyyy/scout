@@ -1,92 +1,89 @@
-import type { AdapterSearchRequest } from "src/types/AdapterSearchRequest";
-import type { FilterFields } from "src/types/FilterFields";
 import type { IndexShape } from "src/types/IndexShape";
 import type { SearchBuilder } from "src/types/SearchBuilder";
-import type { IndexRuntime } from "src/utils/internal/IndexRuntime";
-import { FILTER_HELPERS } from "src/utils/internal/filterHelpers";
 import { executeSearch } from "src/utils/internal/executeSearch";
-import { normalizeFilter } from "src/utils/internal/normalizeFilter";
+import { FILTER_HELPERS } from "src/utils/internal/filterHelpers";
+import { getSearchKey } from "src/utils/internal/getSearchKey";
+import type { IndexRuntime } from "src/utils/internal/IndexRuntime";
 import { requirePositiveInteger } from "src/utils/internal/requirePositiveInteger";
-import { searchKey } from "src/utils/searchKey";
+import type { SearchState } from "src/utils/internal/SearchState";
 import { snapshotFilter } from "src/utils/internal/snapshotFilter";
 import { snapshotValue } from "src/utils/internal/snapshotValue";
 
-/**
- * Every method builds a new request. Filters are normalized only when the
- * request is keyed or executed, so chaining never repeats that work.
- */
-export function createSearchBuilder<
-  TShape extends IndexShape,
-  TFacet extends TShape["facetable"] = never,
-  THighlight extends TShape["highlightable"] = never,
->(
-  runtime: IndexRuntime<TShape["native"]["options"], TShape["document"]>,
-  fields: FilterFields<TShape>,
-  request: AdapterSearchRequest<TShape["native"]["options"]>,
-): SearchBuilder<TShape, TFacet, THighlight>;
-// The overload preserves field and native types while the implementation uses
-// the erased IndexShape to build methods from runtime keys.
-export function createSearchBuilder(
-  runtime: IndexRuntime<unknown, unknown>,
-  fields: FilterFields<IndexShape>,
-  request: AdapterSearchRequest<unknown>,
-): SearchBuilder<IndexShape, string, string> {
-  const next = (changes: Partial<AdapterSearchRequest<unknown>>) =>
-    createSearchBuilder<IndexShape, string, string>(
-      runtime,
-      fields,
-      Object.freeze({ ...request, ...changes }),
-    );
-  const normalized = () => ({
-    ...request,
-    filter: normalizeFilter(request.filter),
-  });
+// Equivalent field sets must share a query key.
+const getFieldSet = (current: readonly string[], added: readonly string[]) =>
+  Object.freeze([...new Set([...current, ...added])].sort());
+
+const getBuilder = (
+  runtime: IndexRuntime,
+  state: SearchState,
+): SearchBuilder<IndexShape, string, string> => {
+  const next = (changes: Partial<SearchState>) =>
+    getBuilder(runtime, Object.freeze({ ...state, ...changes }));
 
   return {
     query: (text) => next({ query: text }),
     profile: (name) => next({ profile: name }),
     where: (build) =>
       next({
-        filter: {
-          type: "and",
-          expressions: [
-            ...(request.filter.type === "and"
-              ? request.filter.expressions
-              : [request.filter]),
-            snapshotFilter(build(fields, FILTER_HELPERS)),
-          ],
-        },
+        filters: Object.freeze([
+          ...state.filters,
+          snapshotFilter(build(runtime.fields, FILTER_HELPERS)),
+        ]),
       }),
     sort: (name) => next({ sort: name }),
-    facets: (...names) =>
-      // Equivalent field sets must share a query key.
-      next({ facets: [...new Set([...request.facets, ...names])].sort() }),
+    facets: (...names) => next({ facets: getFieldSet(state.facets, names) }),
     highlight: (...names) =>
-      next({
-        highlights: [...new Set([...request.highlights, ...names])].sort(),
-      }),
-    page: (number) =>
+      next({ highlights: getFieldSet(state.highlights, names) }),
+    page: (page) =>
       next({
         page: Object.freeze({
-          ...request.page,
-          current: requirePositiveInteger("page", number),
-        }),
-      }),
-    pageSize: (size) =>
-      next({
-        page: Object.freeze({
-          ...request.page,
-          size: requirePositiveInteger("pageSize", size),
+          current: requirePositiveInteger(
+            "page.current",
+            page.current ?? state.page.current,
+          ),
+          size: requirePositiveInteger(
+            "page.size",
+            page.size ?? state.page.size,
+          ),
         }),
       }),
     provider: (options) => next({ provider: snapshotValue(options) }),
-    key: () => searchKey(normalized(), runtime.adapter.fingerprint()),
-    // Normalization failures must reject like every other execute failure.
-    execute: async (context) =>
-      executeSearch(
-        runtime,
-        normalized(),
-        context?.signal ?? new AbortController().signal,
-      ),
+    key: () => getSearchKey(runtime, state),
+    // Resolution failures reject like every other execute failure.
+    execute: async (context) => executeSearch(runtime, state, context?.signal),
   };
+};
+
+/**
+ * Every method returns a new builder over a frozen state. Nothing is resolved
+ * or normalised until `key()` or `execute()` asks.
+ */
+// The overload preserves the index's types while the implementation works on
+// the erased shape, which is what building methods from runtime state needs.
+export function createSearchBuilder<
+  TShape extends IndexShape,
+  TFacet extends TShape["facetable"] = never,
+  THighlight extends TShape["highlightable"] = never,
+>(
+  runtime: IndexRuntime,
+  query: string,
+): SearchBuilder<TShape, TFacet, THighlight>;
+
+export function createSearchBuilder(
+  runtime: IndexRuntime,
+  query: string,
+): SearchBuilder<IndexShape, string, string> {
+  return getBuilder(
+    runtime,
+    Object.freeze({
+      query,
+      profile: "default",
+      sort: "relevance",
+      filters: Object.freeze([]),
+      facets: Object.freeze([]),
+      highlights: Object.freeze([]),
+      page: Object.freeze({ current: 1, size: 20 }),
+      provider: null,
+    }),
+  );
 }

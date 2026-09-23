@@ -1,5 +1,5 @@
 // Keep object variants readable without masking the error on circular values.
-const describe = (value: never): string => {
+const getDescription = (value: never): string => {
   try {
     return JSON.stringify(value) ?? String(value);
   } catch {
@@ -20,5 +20,5 @@ const describe = (value: never): string => {
  * ```
  */
 export const assertUnreachable = (value: never): never => {
-  throw new Error(`Unexpected value: ${describe(value)}`);
+  throw new Error(`Unexpected value: ${getDescription(value)}`);
 };

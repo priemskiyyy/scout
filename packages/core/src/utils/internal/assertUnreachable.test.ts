@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { assertUnreachable } from "src/utils/assertUnreachable";
+import { assertUnreachable } from "src/utils/internal/assertUnreachable";
 
 type Node = { type: "a" } | { type: "b"; value: number };
 
@@ -7,9 +7,11 @@ const dispatch = (node: Node): string => {
   if (node.type === "a") {
     return "a";
   }
+
   if (node.type === "b") {
     return `b${node.value}`;
   }
+
   return assertUnreachable(node);
 };
 
@@ -32,6 +34,7 @@ test("an object variant is printed rather than stringified to [object Object]", 
 
 test("a value JSON has no form for still throws a readable error", () => {
   const node = forge('{"type":"c"}');
+
   Object.defineProperty(node, "self", { value: node, enumerable: true });
 
   // JSON.stringify throws on a circular object rather than answering, so the
@@ -47,11 +50,14 @@ test("a value with no JSON form at all still names itself", () => {
     if (value === "a") {
       return "a";
     }
+
     if (value === "b") {
       return "b";
     }
+
     return assertUnreachable(value);
   };
+
   const missing: "a" | "b" = JSON.parse("null") ?? undefined;
 
   expect(() => name(missing)).toThrowError("Unexpected value: undefined");

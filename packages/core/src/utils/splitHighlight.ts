@@ -9,6 +9,7 @@ const pushPart = (
   if (text.length === 0) {
     return;
   }
+
   parts.push({ text, matched });
 };
 
@@ -28,31 +29,36 @@ export const splitHighlight = (
   markers: HighlightMarkers,
 ): readonly HighlightPart[] => {
   // Most highlights are valid, so strip markers only when parsing fails.
-  const degrade = (): readonly HighlightPart[] => [
+  const getPlainParts = (): readonly HighlightPart[] => [
     {
       text: value.split(markers.open).join("").split(markers.close).join(""),
       matched: false,
     },
   ];
+
   // Empty markers prevent the scan from advancing.
   if (markers.open.length === 0 || markers.close.length === 0) {
-    return degrade();
+    return getPlainParts();
   }
 
   const parts: HighlightPart[] = [];
   let cursor = 0;
   let open = value.indexOf(markers.open);
+
   while (open !== -1) {
     const from = open + markers.open.length;
     const close = value.indexOf(markers.close, from);
+
     if (close === -1) {
-      return degrade();
+      return getPlainParts();
     }
+
     pushPart(parts, value.slice(cursor, open), false);
     pushPart(parts, value.slice(from, close), true);
     cursor = close + markers.close.length;
     open = value.indexOf(markers.open, cursor);
   }
+
   pushPart(parts, value.slice(cursor), false);
 
   // Leftover markers indicate a nested pair or stray close.
@@ -60,8 +66,10 @@ export const splitHighlight = (
     (part) =>
       part.text.includes(markers.open) || part.text.includes(markers.close),
   );
+
   if (leaked || parts.length === 0) {
-    return degrade();
+    return getPlainParts();
   }
+
   return parts;
 };

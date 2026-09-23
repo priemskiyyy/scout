@@ -1,106 +1,147 @@
+import type { AdapterSort } from "src/types/AdapterSort";
+import type { FacetTypes } from "src/types/FacetTypes";
+import type { FacetValueType } from "src/types/FacetValueType";
 import type { IndexDeclaration } from "src/types/IndexDeclaration";
 import type { IndexDefinition } from "src/types/IndexDefinition";
-import { createFilterFields } from "src/utils/internal/createFilterFields";
-import { createSearchBuilder } from "src/utils/internal/createSearchBuilder";
-import type { IndexRuntime } from "src/utils/internal/IndexRuntime";
+import type { ProfileDefinition } from "src/types/ProfileDefinition";
+import type { SortDefinition } from "src/types/SortDefinition";
+import type { SortDirection } from "src/types/SortDirection";
+import type { TextFieldOf } from "src/types/TextFieldOf";
+import { ScoutError } from "src/utils/ScoutError";
+
+// The one rule the types cannot state: a sort has to order by something.
+const getSortBy = (
+  name: string,
+  definition: Readonly<Record<string, SortDirection>>,
+): AdapterSort["by"] => {
+  const by = Object.entries(definition).map(([field, direction]) =>
+    Object.freeze({ field, direction }),
+  );
+
+  if (by.length === 0) {
+    throw new ScoutError({
+      code: "configuration",
+      message: `sorts.${name} must order by at least one field.`,
+    });
+  }
+
+  return Object.freeze(by);
+};
+
+// "relevance" is the engine's own order, which every index has.
+const getSorts = (
+  sorts: Readonly<Record<string, Readonly<Record<string, SortDirection>>>>,
+): Readonly<Record<string, AdapterSort | null>> => {
+  const resolved: Array<[string, AdapterSort | null]> = [["relevance", null]];
+
+  for (const [name, definition] of Object.entries(sorts)) {
+    resolved.push([
+      name,
+      Object.freeze({ name, by: getSortBy(name, definition) }),
+    ]);
+  }
+
+  return Object.freeze(Object.fromEntries(resolved));
+};
+
+// "default" searches the index's own searchable fields.
+const getProfiles = (
+  searchable: readonly string[],
+  profiles: Readonly<
+    Record<string, { readonly searchable: readonly string[] }>
+  >,
+): Readonly<Record<string, readonly string[]>> => {
+  const resolved: Array<[string, readonly string[]]> = [
+    ["default", searchable],
+  ];
+
+  for (const [name, definition] of Object.entries(profiles)) {
+    resolved.push([name, Object.freeze([...definition.searchable])]);
+  }
+
+  return Object.freeze(Object.fromEntries(resolved));
+};
 
 /**
- * Declares the schema, searchable fields, sorts and profiles for one index.
- * The adapter must cover every declared sort and profile.
- * Configuration references and defaults are captured in a frozen declaration.
+ * Declares one index: its schema, the fields a search can use, and its named
+ * sorts and profiles. It names no engine; the `Scout` it is registered with
+ * binds an adapter to it.
  *
  * @example
  * ```ts
  * const products = index({
  *   schema: ProductSchema,
  *   id: (product) => product.id,
+ *   searchable: ["name", "brand"],
  *   filterable: ["brand", "price", "inStock"],
- *   facetable: ["brand"],
+ *   facetable: { brand: "string" },
  *   highlightable: ["name"],
- *   sorts: ["relevance", "priceAsc"],
- *   profiles: ["default"],
- *   adapter: typesense({ client, collection: "products", sorts, profiles }),
+ *   sorts: { priceAsc: { price: "asc" } },
  * });
  * ```
  */
 export const index = <
   TDocument,
-  const TFilterable extends readonly (keyof TDocument & string)[],
-  const TFacetable extends readonly (keyof TDocument & string)[],
-  const THighlightable extends readonly (keyof TDocument & string)[],
-  const TSortName extends string,
-  const TProfileName extends string,
-  TNative,
-  TOptions,
-  TNativeHit,
-  TNativeResponse,
+  const TSearchable extends TextFieldOf<TDocument>,
+  const TFilterable extends keyof TDocument & string = never,
+  const TFacets extends FacetTypes<TDocument> = Record<never, never>,
+  const THighlightable extends keyof TDocument & string = never,
+  const TSorts extends Readonly<Record<string, SortDefinition<TDocument>>> =
+    Record<never, never>,
+  const TProfiles extends Readonly<
+    Record<string, ProfileDefinition<TextFieldOf<TDocument>>>
+  > = Record<never, never>,
 >({
   schema,
-  id: identify,
-  filterable,
-  sorts: [sort],
-  profiles: [profile],
-  adapter,
+  id,
+  searchable,
+  filterable = [],
+  facetable,
+  highlightable = [],
+  sorts,
+  profiles,
   validate = "error",
-  emptyQuery = "reject",
 }: IndexDefinition<
   TDocument,
+  TSearchable,
   TFilterable,
-  TFacetable,
+  TFacets,
   THighlightable,
-  TSortName,
-  TProfileName,
-  TNative,
-  TOptions,
-  TNativeHit,
-  TNativeResponse
->) => {
-  type Shape = {
-    document: TDocument;
-    native: {
-      client: TNative;
-      options: TOptions;
-      hit: TNativeHit;
-      response: TNativeResponse;
-    };
-    filterable: TFilterable[number];
-    facetable: TFacetable[number];
-    highlightable: THighlightable[number];
-    sort: TSortName;
-    profile: TProfileName;
-  };
+  TSorts,
+  TProfiles
+>): IndexDeclaration<
+  TDocument,
+  TFilterable,
+  keyof TFacets & string,
+  THighlightable,
+  "relevance" | (keyof TSorts & string),
+  "default" | (keyof TProfiles & string)
+> => {
+  const defaultFields: readonly string[] = Object.freeze([...searchable]);
 
-  const fields = createFilterFields<Shape>(filterable);
+  const declaredFacets: Readonly<Record<string, FacetValueType>> =
+    Object.freeze({ ...facetable });
 
-  const declaration: IndexDeclaration<Shape> = {
-    adapter,
-    create: (name, isDisposed) => {
-      const runtime: IndexRuntime<TOptions, TDocument> = {
-        adapter,
-        schema,
-        identify,
-        validate,
-        emptyQuery,
-        isDisposed,
-      };
-      return {
-        name,
-        native: adapter.native,
-        search: (text) =>
-          createSearchBuilder<Shape>(runtime, fields, {
-            index: name,
-            query: text,
-            profile,
-            sort,
-            filter: { type: "and", expressions: [] },
-            facets: [],
-            highlights: [],
-            page: Object.freeze({ current: 1, size: 20 }),
-            provider: null,
-          }),
-      };
-    },
-  };
-  Object.freeze(declaration);
-  return declaration;
+  // Built from the caller's own keys, so each is typed by the declaration.
+  const resolvedSorts: Readonly<
+    Record<"relevance" | (keyof TSorts & string), AdapterSort | null>
+  > = getSorts(sorts ?? {});
+
+  const resolvedProfiles: Readonly<
+    Record<"default" | (keyof TProfiles & string), readonly string[]>
+  > = getProfiles(defaultFields, profiles ?? {});
+
+  const facetTypes: Readonly<Record<keyof TFacets & string, FacetValueType>> =
+    declaredFacets;
+
+  return Object.freeze({
+    schema,
+    id,
+    filterable: Object.freeze([...filterable]),
+    facetable: facetTypes,
+    highlightable: Object.freeze([...highlightable]),
+    sorts: resolvedSorts,
+    profiles: resolvedProfiles,
+    validate,
+  });
 };

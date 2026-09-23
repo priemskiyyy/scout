@@ -1,44 +1,36 @@
 import { expect, test } from "vitest";
+
 import { createMockSearchAdapter } from "src/mock/createMockSearchAdapter";
-import { SearchValidationError } from "src/errors/SearchValidationError";
 import type { AdapterSearchHit } from "src/types/AdapterSearchHit";
 import type { AdapterSearchRequest } from "src/types/AdapterSearchRequest";
 import type { AdapterSearchResponse } from "src/types/AdapterSearchResponse";
 import type { HighlightFragment } from "src/types/HighlightFragment";
+import type { IndexDeclaration } from "src/types/IndexDeclaration";
+import { createFilterFields } from "src/utils/internal/createFilterFields";
 import type { IndexRuntime } from "src/utils/internal/IndexRuntime";
 import { mapSearchResponse } from "src/utils/internal/mapSearchResponse";
-import {
-  ProductSchema,
-  product,
-  type Product,
-} from "src/utils/internal/testSchema.fixture";
+import { product } from "src/utils/internal/testSchema.fixture";
+import { productIndex } from "src/utils/internal/testScout.fixture";
 
-/** What the mock adapter takes as provider options. */
-type Options = Readonly<Record<string, unknown>>;
-
-const runtime = (
-  overrides: Partial<IndexRuntime<Options, Product>> = {},
-): IndexRuntime<Options, Product> => ({
-  adapter: createMockSearchAdapter({
-    sorts: { relevance: null },
-    profiles: { default: null },
-  }).adapter,
-  schema: ProductSchema,
-  identify: (document) => document.id,
-  validate: "error",
-  emptyQuery: "allow",
-  isDisposed: () => false,
-  ...overrides,
+const getRuntime = (
+  declaration: IndexDeclaration = productIndex,
+): IndexRuntime => ({
+  name: "products",
+  declaration,
+  adapter: createMockSearchAdapter().adapter,
+  closed: new AbortController().signal,
+  fields: createFilterFields(declaration.filterable),
 });
 
-const request = (
-  overrides: Partial<AdapterSearchRequest<Options>> = {},
-): AdapterSearchRequest<Options> => ({
+const getRequest = (
+  overrides: Partial<AdapterSearchRequest<unknown>> = {},
+): AdapterSearchRequest<unknown> => ({
   index: "products",
   query: "shoe",
+  searchable: ["name"],
   profile: "default",
-  sort: "relevance",
-  filter: { type: "constant", value: true },
+  sort: null,
+  filter: null,
   facets: [],
   highlights: [],
   page: { current: 1, size: 10 },
@@ -46,11 +38,10 @@ const request = (
   ...overrides,
 });
 
-const response = (
+const getResponse = (
   overrides: Partial<AdapterSearchResponse<unknown, unknown>> = {},
 ): AdapterSearchResponse<unknown, unknown> => ({
   hits: [],
-  page: { kind: "page", current: 1, size: 10, next: null, previous: null },
   total: { value: 0, accuracy: "exact", scope: "matches" },
   facets: {},
   took: null,
@@ -58,7 +49,7 @@ const response = (
   ...overrides,
 });
 
-const hit = (
+const getHit = (
   document: unknown,
   highlights: Record<string, readonly HighlightFragment[]> = {},
 ): AdapterSearchHit<unknown> => ({
@@ -68,27 +59,31 @@ const hit = (
 });
 
 /** A highlight record that says how often the mapping read it. */
-const counted = (
+const getCountedHighlights = (
   reads: string[],
 ): Record<string, readonly HighlightFragment[]> =>
   Object.defineProperty({}, "name", {
     enumerable: true,
     get: () => {
       reads.push("name");
+
       return [];
     },
   });
 
-test("a valid hit carries its id, its document and its requested highlights", () => {
+const skipping: IndexDeclaration = { ...productIndex, validate: "skip" };
+
+test("a valid hit carries its id, its document and every requested highlight", () => {
   const fragment: HighlightFragment = {
     path: ["name"],
     parts: [{ text: "shoe", matched: true }],
     truncated: false,
   };
+
   const result = mapSearchResponse({
-    runtime: runtime(),
-    request: request({ highlights: ["name", "brand"] }),
-    response: response({ hits: [hit(product(), { name: [fragment] })] }),
+    runtime: getRuntime(),
+    request: getRequest({ highlights: ["name", "brand"] }),
+    response: getResponse({ hits: [getHit(product(), { name: [fragment] })] }),
     elapsed: 4,
   });
 
@@ -104,26 +99,33 @@ test("a valid hit carries its id, its document and its requested highlights", ()
   expect(result.skipped).toBe(0);
 });
 
-test("a document the schema rejects is refused by default", () => {
+test("a document the schema rejects fails the search, saying why and how to skip it", () => {
   expect(() =>
     mapSearchResponse({
-      runtime: runtime(),
-      request: request(),
-      response: response({ hits: [hit({ id: "p1" })] }),
+      runtime: getRuntime(),
+      request: getRequest(),
+      response: getResponse({ hits: [getHit({ id: "p1" })] }),
       elapsed: 0,
     }),
-  ).toThrowError(SearchValidationError);
+  ).toThrowError(
+    expect.objectContaining({
+      code: "validation",
+      message:
+        'A document from products did not match its schema. Set validate: "skip" on the index to drop such documents instead. The schema said: Not a product.',
+      cause: [{ message: "Not a product." }],
+    }),
+  );
 });
 
 test("validate skip drops the document and counts it", () => {
   const result = mapSearchResponse({
-    runtime: runtime({ validate: "skip" }),
-    request: request(),
-    response: response({ hits: [hit({ id: "p1" }), hit(product())] }),
+    runtime: getRuntime(skipping),
+    request: getRequest(),
+    response: getResponse({ hits: [getHit({ id: "p1" }), getHit(product())] }),
     elapsed: 0,
   });
 
-  expect(result.hits.map((entry) => entry.id)).toEqual(["p1"]);
+  expect(result.hits.map((hit) => hit.id)).toEqual(["p1"]);
   expect(result.skipped).toBe(1);
 });
 
@@ -132,13 +134,14 @@ test("validate skip drops the document and counts it", () => {
 test("a dropped document never pays for a highlight record", () => {
   const dropped: string[] = [];
   const kept: string[] = [];
-  const result = mapSearchResponse({
-    runtime: runtime({ validate: "skip" }),
-    request: request({ highlights: ["name"] }),
-    response: response({
+
+  mapSearchResponse({
+    runtime: getRuntime(skipping),
+    request: getRequest({ highlights: ["name"] }),
+    response: getResponse({
       hits: [
-        hit({ id: "p1" }, counted(dropped)),
-        hit(product(), counted(kept)),
+        getHit({ id: "p1" }, getCountedHighlights(dropped)),
+        getHit(product(), getCountedHighlights(kept)),
       ],
     }),
     elapsed: 0,
@@ -146,16 +149,42 @@ test("a dropped document never pays for a highlight record", () => {
 
   expect(dropped).toEqual([]);
   expect(kept).toEqual(["name"]);
-  expect(result.skipped).toBe(1);
+});
+
+test("a rejecting asynchronous schema is refused without an unhandled rejection", async () => {
+  const asynchronous: IndexDeclaration = {
+    ...productIndex,
+    schema: {
+      "~standard": {
+        version: 1,
+        vendor: "rejecting-test-schema",
+        validate: async () => {
+          throw new Error("Async schema failure");
+        },
+      },
+    },
+  };
+
+  expect(() =>
+    mapSearchResponse({
+      runtime: getRuntime(asynchronous),
+      request: getRequest(),
+      response: getResponse({ hits: [getHit(product())] }),
+      elapsed: 0,
+    }),
+  ).toThrowError(expect.objectContaining({ code: "validation" }));
+
+  // Let the runtime report an unobserved schema rejection to the test runner.
+  await new Promise((resolve) => setImmediate(resolve));
 });
 
 // Never a fabricated empty count: an engine that said nothing about a facet is
 // reported as having said nothing.
 test("a requested facet the engine skipped comes back unknown", () => {
   const result = mapSearchResponse({
-    runtime: runtime(),
-    request: request({ facets: ["brand"] }),
-    response: response(),
+    runtime: getRuntime(),
+    request: getRequest({ facets: ["brand"] }),
+    response: getResponse(),
     elapsed: 0,
   });
 
@@ -164,11 +193,90 @@ test("a requested facet the engine skipped comes back unknown", () => {
   });
 });
 
-test("inherited properties cannot masquerade as returned facets or highlights", () => {
+// Some engines, Typesense among them, report every facet value as a string.
+test("facet values are decoded to the type the index declared", () => {
   const result = mapSearchResponse({
-    runtime: runtime(),
-    request: request({ facets: ["constructor"], highlights: ["toString"] }),
-    response: response({ hits: [hit(product())] }),
+    runtime: getRuntime(),
+    request: getRequest({ facets: ["brand", "inStock", "price"] }),
+    response: getResponse({
+      facets: {
+        brand: {
+          values: [{ value: "Nike", count: 2 }],
+          exhaustive: true,
+          native: { raw: 1 },
+        },
+        inStock: {
+          values: [{ value: "true", count: 1 }],
+          exhaustive: false,
+          native: null,
+        },
+        price: {
+          values: [{ value: "12.5", count: 3 }],
+          exhaustive: "unknown",
+          native: null,
+        },
+      },
+    }),
+    elapsed: 0,
+  });
+
+  expect(result.facets).toEqual({
+    brand: {
+      field: "brand",
+      values: [{ value: "Nike", count: 2 }],
+      exhaustive: true,
+      native: { raw: 1 },
+    },
+    inStock: {
+      field: "inStock",
+      values: [{ value: true, count: 1 }],
+      exhaustive: false,
+      native: null,
+    },
+    price: {
+      field: "price",
+      values: [{ value: 12.5, count: 3 }],
+      exhaustive: "unknown",
+      native: null,
+    },
+  });
+});
+
+test("a facet value that is not of its declared type is the engine's failure", () => {
+  expect(() =>
+    mapSearchResponse({
+      runtime: getRuntime(),
+      request: getRequest({ facets: ["price"] }),
+      response: getResponse({
+        facets: {
+          price: {
+            values: [{ value: "cheap", count: 1 }],
+            exhaustive: true,
+            native: null,
+          },
+        },
+      }),
+      elapsed: 0,
+    }),
+  ).toThrowError(
+    expect.objectContaining({
+      code: "provider",
+      message:
+        'The mock facet price returned "cheap", which is not a value of its declared type.',
+    }),
+  );
+});
+
+test("inherited properties cannot masquerade as returned facets or highlights", () => {
+  const declaration: IndexDeclaration = {
+    ...productIndex,
+    facetable: Object.fromEntries([["constructor", "string"]]),
+  };
+
+  const result = mapSearchResponse({
+    runtime: getRuntime(declaration),
+    request: getRequest({ facets: ["constructor"], highlights: ["toString"] }),
+    response: getResponse({ hits: [getHit(product())] }),
     elapsed: 0,
   });
 
@@ -183,6 +291,12 @@ test("inherited properties cannot masquerade as returned facets or highlights", 
 
 test("prototype-named fields remain own properties on mapped results", () => {
   const field = "__proto__";
+
+  const declaration: IndexDeclaration = {
+    ...productIndex,
+    facetable: Object.fromEntries([[field, "string"]]),
+  };
+
   const fragments: readonly HighlightFragment[] = [
     {
       path: [field],
@@ -190,84 +304,60 @@ test("prototype-named fields remain own properties on mapped results", () => {
       truncated: false,
     },
   ];
+
   const facet = {
-    field,
     values: [{ value: "shoe", count: 1 }],
     exhaustive: true,
     native: null,
   };
+
   const result = mapSearchResponse({
-    runtime: runtime(),
-    request: request({ facets: [field], highlights: [field] }),
-    response: response({
-      hits: [hit(product(), Object.fromEntries([[field, fragments]]))],
+    runtime: getRuntime(declaration),
+    request: getRequest({ facets: [field], highlights: [field] }),
+    response: getResponse({
+      hits: [getHit(product(), Object.fromEntries([[field, fragments]]))],
       facets: Object.fromEntries([[field, facet]]),
     }),
     elapsed: 0,
   });
 
-  expect(Object.hasOwn(result.facets, field)).toBe(true);
-  expect(result.facets[field]).toEqual(facet);
   const highlights = result.hits[0]?.highlights ?? {};
+
+  expect(Object.hasOwn(result.facets, field)).toBe(true);
+  expect(result.facets[field]).toEqual({ field, ...facet });
   expect(Object.hasOwn(highlights, field)).toBe(true);
   expect(highlights[field]).toEqual(fragments);
 });
 
-test("a rejecting asynchronous schema is refused without an unhandled rejection", async () => {
-  expect(() =>
-    mapSearchResponse({
-      runtime: runtime({
-        schema: {
-          "~standard": {
-            version: 1,
-            vendor: "rejecting-test-schema",
-            validate: async () => {
-              throw new Error("Async schema failure");
-            },
-          },
-        },
-      }),
-      request: request(),
-      response: response({ hits: [hit(product())] }),
-      elapsed: 0,
-    }),
-  ).toThrowError(SearchValidationError);
-
-  // Let the runtime report an unobserved schema rejection to the test runner.
-  await new Promise((resolve) => setImmediate(resolve));
-});
-
-test("a facet the engine answered is passed through as it came", () => {
-  const brand = {
-    field: "brand",
-    values: [{ value: "Nike", count: 2 }],
-    exhaustive: true,
-    native: { raw: 1 },
-  };
+test("the page is derived from the total and how many hits came back", () => {
   const result = mapSearchResponse({
-    runtime: runtime(),
-    request: request({ facets: ["brand"] }),
-    response: response({ facets: { brand } }),
+    runtime: getRuntime(),
+    request: getRequest({ page: { current: 1, size: 1 } }),
+    response: getResponse({
+      hits: [getHit(product())],
+      total: { value: 2, accuracy: "exact", scope: "matches" },
+    }),
     elapsed: 0,
   });
 
-  expect(result.facets["brand"]).toEqual(brand);
+  expect(result.page).toEqual({ current: 1, size: 1, next: 2, previous: null });
 });
 
-test("the provider's own time wins, and the core's measurement fills in for it", () => {
-  const provider = mapSearchResponse({
-    runtime: runtime(),
-    request: request(),
-    response: response({ took: 7 }),
-    elapsed: 40,
-  });
-  const measured = mapSearchResponse({
-    runtime: runtime(),
-    request: request(),
-    response: response({ took: null }),
+test("the engine's own time wins, and the core's measurement fills in for it", () => {
+  const reported = mapSearchResponse({
+    runtime: getRuntime(),
+    request: getRequest(),
+    response: getResponse({ took: 7 }),
     elapsed: 40,
   });
 
-  expect(provider.took).toEqual({ milliseconds: 7, source: "provider" });
+  const measured = mapSearchResponse({
+    runtime: getRuntime(),
+    request: getRequest(),
+    response: getResponse(),
+    elapsed: 40,
+  });
+
+  expect(reported.took).toEqual({ milliseconds: 7, source: "provider" });
   expect(measured.took).toEqual({ milliseconds: 40, source: "scout" });
 });

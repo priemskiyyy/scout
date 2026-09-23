@@ -1,40 +1,33 @@
-import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
+import { ScoutError } from "src/utils/ScoutError";
 import type { FilterExpression } from "src/types/FilterExpression";
 import type { FilterFields } from "src/types/FilterFields";
-import type { FilterOperator } from "src/types/FilterOperator";
+import type { FilterValue } from "src/types/FilterValue";
 import type { IndexShape } from "src/types/IndexShape";
 
 // Every operator exists at runtime; the type of `FilterFields` is what decides
-// which ones a given field offers. Taking `unknown` here is what makes this
-// object assignable to every specific field type without an assertion.
+// which ones a given field offers. Each takes the widest value any field could
+// pass it, which makes this object assignable to every specific field type
+// without an assertion.
 type AnyFilterField = {
-  eq: (value: unknown) => FilterExpression;
-  neq: (value: unknown) => FilterExpression;
-  in: (values: readonly unknown[]) => FilterExpression;
-  notIn: (values: readonly unknown[]) => FilterExpression;
-  gt: (value: unknown) => FilterExpression;
-  gte: (value: unknown) => FilterExpression;
-  lt: (value: unknown) => FilterExpression;
-  lte: (value: unknown) => FilterExpression;
-  between: (min: unknown, max: unknown) => FilterExpression;
+  eq: (value: FilterValue) => FilterExpression;
+  neq: (value: FilterValue) => FilterExpression;
+  in: (values: readonly FilterValue[]) => FilterExpression;
+  notIn: (values: readonly FilterValue[]) => FilterExpression;
+  gt: (value: number) => FilterExpression;
+  gte: (value: number) => FilterExpression;
+  lt: (value: number) => FilterExpression;
+  lte: (value: number) => FilterExpression;
+  between: (min: number, max: number) => FilterExpression;
 };
 
-const comparison = (
-  field: string,
-  operator: FilterOperator,
-  value: unknown,
-): FilterExpression => ({ type: "comparison", field, operator, value });
-
 // Reject reversed bounds before a provider silently answers with no matches.
-const requireOrderedRange = (field: string, min: unknown, max: unknown) => {
-  const comparable =
-    (typeof min === "number" && typeof max === "number") ||
-    (typeof min === "string" && typeof max === "string");
-  if (!comparable || min <= max) {
+const requireOrderedRange = (field: string, min: number, max: number) => {
+  if (min <= max) {
     return;
   }
-  throw new SearchConfigurationError({
-    path: field,
+
+  throw new ScoutError({
+    code: "configuration",
     message:
       `between(${String(min)}, ${String(max)}) on ${field} has its bounds the ` +
       `wrong way round, which every engine answers with no results and no ` +
@@ -42,18 +35,34 @@ const requireOrderedRange = (field: string, min: unknown, max: unknown) => {
   });
 };
 
-const fieldOperators = (field: string): AnyFilterField => ({
-  eq: (value) => comparison(field, "eq", value),
-  neq: (value) => comparison(field, "neq", value),
-  in: (values) => comparison(field, "in", values),
-  notIn: (values) => comparison(field, "not-in", values),
-  gt: (value) => comparison(field, "gt", value),
-  gte: (value) => comparison(field, "gte", value),
-  lt: (value) => comparison(field, "lt", value),
-  lte: (value) => comparison(field, "lte", value),
+const getFieldOperators = (field: string): AnyFilterField => ({
+  eq: (value) => ({ type: "comparison", field, operator: "eq", value }),
+  neq: (value) => ({ type: "comparison", field, operator: "neq", value }),
+  in: (values) => ({
+    type: "comparison",
+    field,
+    operator: "in",
+    value: values,
+  }),
+  notIn: (values) => ({
+    type: "comparison",
+    field,
+    operator: "not-in",
+    value: values,
+  }),
+  gt: (value) => ({ type: "comparison", field, operator: "gt", value }),
+  gte: (value) => ({ type: "comparison", field, operator: "gte", value }),
+  lt: (value) => ({ type: "comparison", field, operator: "lt", value }),
+  lte: (value) => ({ type: "comparison", field, operator: "lte", value }),
   between: (min, max) => {
     requireOrderedRange(field, min, max);
-    return comparison(field, "between", [min, max]);
+
+    return {
+      type: "comparison",
+      field,
+      operator: "between",
+      value: [min, max],
+    };
   },
 });
 
@@ -72,11 +81,12 @@ const fieldOperators = (field: string): AnyFilterField => ({
 export function createFilterFields<TShape extends IndexShape>(
   fields: readonly TShape["filterable"][],
 ): FilterFields<TShape>;
+
 export function createFilterFields(
   fields: readonly string[],
 ): Record<string, AnyFilterField> {
   // fromEntries keeps __proto__ an own field instead of invoking its setter.
   return Object.fromEntries<AnyFilterField>(
-    fields.map((field) => [field, fieldOperators(field)]),
+    fields.map((field) => [field, getFieldOperators(field)]),
   );
 }

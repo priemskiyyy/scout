@@ -1,4 +1,4 @@
-import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
+import { ScoutError } from "src/utils/ScoutError";
 
 /**
  * Refuses a page or page size that cannot mean anything.
@@ -9,14 +9,15 @@ import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
  * into page -1 and ask the provider to explain it.
  */
 export const requirePositiveInteger = (
-  path: "page" | "pageSize",
+  path: "page.current" | "page.size",
   value: number,
 ): number => {
   if (Number.isInteger(value) && value > 0) {
     return value;
   }
-  throw new SearchConfigurationError({
-    path,
+
+  throw new ScoutError({
+    code: "configuration",
     message:
       `${path} must be a whole number greater than zero, and ${value} is not. ` +
       `Scout pages are one-based.`,

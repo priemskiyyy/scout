@@ -56,6 +56,7 @@ test("no part ever carries a marker, so a document cannot render as markup", () 
     expect(part.text.includes(MARKERS.open)).toBe(false);
     expect(part.text.includes(MARKERS.close)).toBe(false);
   }
+
   expect(parts).toEqual([{ text: "shoe <img onerror=x> ", matched: false }]);
 });
 
@@ -80,6 +81,7 @@ test("slicing is code point safe", () => {
       .join("")
       .split(MARKERS.close)
       .join("");
+
     expect(rejoin(value)).toBe(stripped);
     expect([...rejoin(value)]).toEqual([...stripped]);
   }

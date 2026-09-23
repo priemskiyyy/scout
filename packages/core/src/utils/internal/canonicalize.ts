@@ -1,19 +1,19 @@
-import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
+import { ScoutError } from "src/utils/ScoutError";
 
 const isPlainObject = (value: object): value is Record<string, unknown> => {
   const prototype = Object.getPrototypeOf(value);
+
   return prototype === Object.prototype || prototype === null;
 };
 
-const refuse = (path: string, what: string): never => {
-  throw new SearchConfigurationError({
-    path,
+const getCanonicalError = (path: string, what: string) =>
+  new ScoutError({
+    code: "configuration",
     message:
       `${path} is ${what}, which has no canonical form, so it cannot take part ` +
       `in the query identity, and two searches that differ only there would ` +
       `share a cache entry. Replace it with plain data.`,
   });
-};
 
 /**
  * Turns a value into the one string that stands for it in a query identity.
@@ -34,69 +34,91 @@ export const canonicalize = (
   if (value === null) {
     return "null";
   }
+
   if (typeof value === "string") {
     return JSON.stringify(value);
   }
+
   if (typeof value === "number") {
     if (Number.isNaN(value)) {
-      return refuse(path, "NaN");
+      throw getCanonicalError(path, "NaN");
     }
+
     if (!Number.isFinite(value)) {
-      return refuse(path, "an infinite number");
+      throw getCanonicalError(path, "an infinite number");
     }
+
     return String(value);
   }
+
   if (typeof value === "boolean") {
     return String(value);
   }
+
   if (typeof value === "bigint") {
     return `${value.toString()}n`;
   }
+
   if (typeof value === "function") {
-    return refuse(path, "a function");
+    throw getCanonicalError(path, "a function");
   }
+
   if (typeof value === "symbol") {
-    return refuse(path, "a symbol");
+    throw getCanonicalError(path, "a symbol");
   }
+
   if (typeof value === "undefined") {
-    return refuse(path, "undefined");
+    throw getCanonicalError(path, "undefined");
   }
+
   if (value instanceof Date) {
     if (Number.isNaN(value.getTime())) {
-      return refuse(path, "an invalid Date");
+      throw getCanonicalError(path, "an invalid Date");
     }
+
     return JSON.stringify(value.toISOString());
   }
+
   const parents = ancestors ?? new Set<object>();
+
   if (parents.has(value)) {
-    return refuse(path, "a circular reference");
+    throw getCanonicalError(path, "a circular reference");
   }
+
   if (!Array.isArray(value) && !isPlainObject(value)) {
     // Custom prototypes may have no constructor to name.
     const named = value.constructor?.name ?? "an unnamed type";
-    return refuse(path, `an instance of ${named}`);
+
+    throw getCanonicalError(path, `an instance of ${named}`);
   }
 
   parents.add(value);
+
   try {
     if (Array.isArray(value)) {
       // Array.from visits holes too, so a sparse array cannot impersonate [].
       const parts = Array.from(value, (entry, position) =>
         canonicalize(entry, `${path}[${position}]`, parents),
       );
+
       return `[${parts.join(",")}]`;
     }
+
     const parts: string[] = [];
+
     for (const key of Object.keys(value).sort()) {
       const member = value[key];
+
       // Undefined object members do not change identity; array holes do.
       if (typeof member === "undefined") {
         continue;
       }
+
       parts.push(
         `${JSON.stringify(key)}:${canonicalize(member, `${path}.${key}`, parents)}`,
       );
     }
+
     return `{${parts.join(",")}}`;
   } finally {
     // Shared subtrees are valid. Only a reference to an ancestor is a cycle.

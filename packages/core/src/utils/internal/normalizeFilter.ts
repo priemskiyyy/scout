@@ -1,68 +1,85 @@
 import type { FilterExpression } from "src/types/FilterExpression";
-import { SearchConfigurationError } from "src/errors/SearchConfigurationError";
-import { MATCH_ALL, MATCH_NONE } from "src/utils/constants/filterConstants";
-import { assertUnreachable } from "src/utils/assertUnreachable";
+import type { FilterValue } from "src/types/FilterValue";
+import { assertUnreachable } from "src/utils/internal/assertUnreachable";
 import { canonicalize } from "src/utils/internal/canonicalize";
 
-const SET_OPERATORS = ["in", "not-in"];
+// The order of the canonical keys, which is the default string order.
+const compareKeys = (
+  [left]: readonly [string, FilterValue],
+  [right]: readonly [string, FilterValue],
+) => {
+  if (left < right) {
+    return -1;
+  }
 
-const canonicalSet = (values: readonly unknown[], field: string) => {
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
+};
+
+const getCanonicalSet = (
+  values: readonly FilterValue[],
+  field: string,
+): readonly FilterValue[] => {
   // Canonical keys distinguish mixed types, such as 1 and "1".
-  const seen = new Map<string, unknown>();
+  const seen = new Map<string, FilterValue>();
+
   for (const value of values) {
     const key = canonicalize(value, field);
+
     if (seen.has(key)) {
       continue;
     }
+
     seen.set(key, value);
   }
-  return [...seen.keys()].sort().map((key) => seen.get(key));
+
+  return [...seen.entries()].sort(compareKeys).map(([, value]) => value);
 };
 
 /**
- * Normalises constants, groups and set operands for adapter dispatch and
- * query identity. Preserves comparison order and validates every operand,
- * even when a constant already determines the group's result.
+ * Normalises a filter for dispatch and for query identity: `true` when it
+ * restricts nothing, `false` when it matches nothing, and otherwise a tree
+ * with no constant left in it, flattened groups and sorted, deduplicated set
+ * operands. Comparison order is preserved, and every operand is validated,
+ * even one a constant has already outvoted.
  *
  * @example
  * ```ts
- * normalizeFilter({ type: "and", expressions: [] }); // matches everything
+ * normalizeFilter({ type: "and", expressions: [] }); // true
  * ```
  */
 export const normalizeFilter = (
   expression: FilterExpression,
-): FilterExpression => {
-  if (expression.type === "constant") {
-    return expression;
-  }
-
+): FilterExpression | boolean => {
   if (expression.type === "comparison") {
-    if (!SET_OPERATORS.includes(expression.operator)) {
+    if (expression.operator !== "in" && expression.operator !== "not-in") {
       // Reject operands that cannot participate in query identity.
       canonicalize(expression.value, expression.field);
+
       return expression;
     }
-    if (!Array.isArray(expression.value)) {
-      throw new SearchConfigurationError({
-        path: expression.field,
-        message: `The ${expression.operator} filter on ${expression.field} requires an array.`,
-      });
-    }
+
+    // An empty set matches nothing, and its negation restricts nothing.
     if (expression.value.length === 0) {
-      // An empty set matches nothing, and its negation restricts nothing.
-      return expression.operator === "in" ? MATCH_NONE : MATCH_ALL;
+      return expression.operator === "not-in";
     }
+
     return {
       ...expression,
-      value: canonicalSet(expression.value, expression.field),
+      value: getCanonicalSet(expression.value, expression.field),
     };
   }
 
   if (expression.type === "not") {
     const inner = normalizeFilter(expression.expression);
-    if (inner.type === "constant") {
-      return inner.value ? MATCH_NONE : MATCH_ALL;
+
+    if (typeof inner === "boolean") {
+      return !inner;
     }
+
     return { type: "not", expression: inner };
   }
 
@@ -72,35 +89,45 @@ export const normalizeFilter = (
     const decides = expression.type === "or";
     let decided = false;
     const remaining: FilterExpression[] = [];
-    for (const expressionChild of expression.expressions) {
-      // Visit every child even after a deciding constant: invalid operands
+
+    for (const member of expression.expressions) {
+      // Visit every member even after a deciding constant: invalid operands
       // still need to be refused before a request can reach an adapter.
-      const child = normalizeFilter(expressionChild);
-      if (child.type === "constant") {
-        if (child.value === decides) {
+      const normalized = normalizeFilter(member);
+
+      if (typeof normalized === "boolean") {
+        if (normalized === decides) {
           decided = true;
         }
+
         continue;
       }
-      if (child.type === expression.type) {
-        for (const nested of child.expressions) {
-          remaining.push(nested);
-        }
+
+      if (normalized.type === expression.type) {
+        remaining.push(...normalized.expressions);
+
         continue;
       }
-      remaining.push(child);
+
+      remaining.push(normalized);
     }
+
     if (decided) {
-      return decides ? MATCH_ALL : MATCH_NONE;
+      return decides;
     }
-    if (remaining.length === 1 && typeof remaining[0] !== "undefined") {
-      return remaining[0];
+
+    const [only] = remaining;
+
+    if (remaining.length === 1 && only !== undefined) {
+      return only;
     }
+
     if (remaining.length > 1) {
       return { type: expression.type, expressions: remaining };
     }
-    // Empty groups resolve to their neutral constant.
-    return decides ? MATCH_NONE : MATCH_ALL;
+
+    // An empty group means its neutral constant.
+    return !decides;
   }
 
   return assertUnreachable(expression);

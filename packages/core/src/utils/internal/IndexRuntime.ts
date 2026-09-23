@@ -1,15 +1,14 @@
-import type { SearchAdapter } from "src/types/SearchAdapter";
-import type { StandardSchema } from "src/types/StandardSchema";
+import type { AnySearchAdapter } from "src/types/AnySearchAdapter";
+import type { FilterFields } from "src/types/FilterFields";
+import type { IndexDeclaration } from "src/types/IndexDeclaration";
+import type { IndexShape } from "src/types/IndexShape";
 
-/**
- * Execution dependencies shared by an index's builders. The option type ties
- * each request to its adapter without a type assertion.
- */
-export type IndexRuntime<TOptions, TDocument> = {
-  adapter: SearchAdapter<unknown, TOptions, unknown, unknown>;
-  schema: StandardSchema<TDocument>;
-  identify: (document: TDocument) => string;
-  validate: "error" | "skip";
-  emptyQuery: "allow" | "reject";
-  isDisposed: () => boolean;
+/** What every search on one index needs: its declaration, its adapter and its Scout. */
+export type IndexRuntime = {
+  readonly name: string;
+  readonly declaration: IndexDeclaration;
+  readonly adapter: AnySearchAdapter;
+  /** Aborts when the Scout is disposed. */
+  readonly closed: AbortSignal;
+  readonly fields: FilterFields<IndexShape>;
 };
