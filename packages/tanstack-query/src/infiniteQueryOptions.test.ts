@@ -1,11 +1,11 @@
+import type { SearchTotal } from "@priemskiyyy/scout";
 import { QueryClient } from "@tanstack/query-core";
-import { SearchAbortedError } from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
+
 import { infiniteQueryOptions } from "src/infiniteQueryOptions";
 import { products } from "src/products.fixture";
-import { queryOptions } from "src/queryOptions";
 import type { Product } from "src/products.fixture";
-import type { SearchPage } from "@priemskiyyy/scout";
+import { queryOptions } from "src/queryOptions";
 
 const product = (id: string): Product => ({
   id,
@@ -19,15 +19,25 @@ const context = (pageParam: number) => ({
   signal: new AbortController().signal,
 });
 
-/** The next page parameter after one real page came back looking like this. */
-const nextAfter = async (
-  documents: readonly Product[],
-  next: SearchPage["next"],
+const UNKNOWN: SearchTotal = { accuracy: "unknown", scope: "unknown" };
+
+const getExact = (value: number): SearchTotal => ({
+  value,
+  accuracy: "exact",
+  scope: "matches",
+});
+
+/** The next page parameter after one real page of three came back like this. */
+const getNextAfter = async (
+  documents: readonly unknown[],
+  total: SearchTotal,
 ) => {
   const { search } = products({
     pageSize: 3,
-    answer: () => ({ documents, next }),
+    validate: "skip",
+    answer: () => ({ documents, total }),
   });
+
   const options = infiniteQueryOptions(search);
 
   return options.getNextPageParam(await options.queryFn(context(1)));
@@ -37,7 +47,7 @@ test("the base key is stable across pages, so one entry holds the whole list", (
   const { search } = products();
 
   expect(infiniteQueryOptions(search).queryKey).toEqual(
-    infiniteQueryOptions(search.page(7)).queryKey,
+    infiniteQueryOptions(search.page({ current: 7 })).queryKey,
   );
 });
 
@@ -53,10 +63,11 @@ test("the base key is namespaced under the search's own, marked infinite", () =>
 
 test("an infinite query and a normal query at page one never share a cache entry", async () => {
   const { search } = products({
-    answer: () => ({ documents: [product("a")], next: null }),
+    answer: () => ({ documents: [product("a")], total: getExact(1) }),
   });
+
   const client = new QueryClient();
-  const page = queryOptions(search.page(1));
+  const page = queryOptions(search.page({ current: 1 }));
   const infinite = infiniteQueryOptions(search);
 
   expect(infinite.queryKey).not.toEqual(page.queryKey);
@@ -92,42 +103,43 @@ test("the signal TanStack supplies reaches the adapter", async () => {
     pageParam: 2,
     signal: controller.signal,
   });
+
   controller.abort(new Error("the list unmounted"));
 
-  await expect(pending).rejects.toThrowError(SearchAbortedError);
+  await expect(pending).rejects.toMatchObject({ code: "aborted" });
   expect(mock.requests[0]?.aborted()).toBe(true);
 });
 
-test("an engine that names the next page is believed", async () => {
-  await expect(nextAfter([product("a")], 4)).resolves.toBe(4);
-});
-
-test("an engine that says there is no next page ends the list", async () => {
-  await expect(nextAfter([product("a")], null)).resolves.toBeUndefined();
-});
-
-test("an engine that cannot say advances while the page came back full", async () => {
+test("a next page the core derived is followed", async () => {
   const full = [product("a"), product("b"), product("c")];
 
-  await expect(nextAfter(full, "unknown")).resolves.toBe(2);
+  await expect(getNextAfter(full, getExact(9))).resolves.toBe(2);
 });
 
-test("an engine that cannot say stops on a page that came back short", async () => {
+test("a count the page reached ends the list", async () => {
+  const full = [product("a"), product("b"), product("c")];
+
+  await expect(getNextAfter(full, getExact(3))).resolves.toBeUndefined();
+});
+
+test("an engine that cannot count advances while the page came back full", async () => {
+  const full = [product("a"), product("b"), product("c")];
+
+  await expect(getNextAfter(full, UNKNOWN)).resolves.toBe(2);
+});
+
+test("an engine that cannot count stops on a page that came back short", async () => {
   await expect(
-    nextAfter([product("a"), product("b")], "unknown"),
+    getNextAfter([product("a"), product("b")], UNKNOWN),
   ).resolves.toBeUndefined();
 });
 
-test("validation skips do not hide a full provider page from infinite pagination", async () => {
-  const { search } = products({
-    pageSize: 3,
-    answer: () => ({ documents: [product("a")], next: "unknown" }),
-  });
-  const options = infiniteQueryOptions(search);
-  const page = await options.queryFn(context(1));
-
-  expect(options.getNextPageParam({ ...page, skipped: 2 })).toBe(2);
-  expect(options.getNextPageParam({ ...page, skipped: 1 })).toBeUndefined();
+// The engine filled the page, so there may be more, however many of its
+// documents the schema then dropped.
+test("documents dropped by validation do not end the list early", async () => {
+  await expect(
+    getNextAfter([product("a"), { id: "broken" }, { id: "worse" }], UNKNOWN),
+  ).resolves.toBe(2);
 });
 
 test("a last page that is exactly full costs one empty request and then stops", async () => {
@@ -136,11 +148,15 @@ test("a last page that is exactly full costs one empty request and then stops", 
     // Two documents and nothing more, on an engine that never says whether
     // another page exists. Page one is indistinguishable from a full page in
     // the middle of a list, so the heuristic asks for page two.
-    answer: (page) => ({
-      documents: page === 1 ? [product("a"), product("b")] : [],
-      next: "unknown",
-    }),
+    answer: (page) => {
+      if (page === 1) {
+        return { documents: [product("a"), product("b")], total: UNKNOWN };
+      }
+
+      return { documents: [], total: UNKNOWN };
+    },
   });
+
   const client = new QueryClient();
 
   const data = await client.fetchInfiniteQuery({

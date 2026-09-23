@@ -59,6 +59,7 @@ const observed = new QueryObserver(
   client,
   queryOptions(faceted),
 ).getCurrentResult();
+
 const observedPages = new InfiniteQueryObserver(
   client,
   infiniteQueryOptions(faceted),

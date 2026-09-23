@@ -1,6 +1,6 @@
 import { Scout, index } from "@priemskiyyy/scout";
 import { createMockSearchAdapter } from "@priemskiyyy/scout/mock";
-import type { SearchPage, StandardSchema } from "@priemskiyyy/scout";
+import type { SearchTotal, StandardSchema } from "@priemskiyyy/scout";
 
 export type Product = {
   id: string;
@@ -13,7 +13,9 @@ const isProduct = (value: unknown): value is Product => {
   if (value === null || typeof value !== "object") {
     return false;
   }
+
   const record: Record<string, unknown> = { ...value };
+
   return (
     typeof record["id"] === "string" &&
     typeof record["name"] === "string" &&
@@ -27,24 +29,30 @@ const ProductSchema: StandardSchema<Product> = {
   "~standard": {
     version: 1,
     vendor: "scout-tanstack-query-test",
-    validate: (value) =>
-      isProduct(value)
-        ? { value }
-        : { issues: [{ message: "Not a product." }] },
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
   },
 };
 
 type Answer = {
-  documents: readonly Product[];
-  next: SearchPage["next"];
+  documents: readonly unknown[];
+  total: SearchTotal;
 };
 
-const emptyAnswer = (): Answer => ({ documents: [], next: null });
+const EMPTY: Answer = {
+  documents: [],
+  total: { value: 0, accuracy: "exact", scope: "matches" },
+};
 
 /**
- * One index over a mock adapter that answers per page, so a test says what each
- * page contains and what the engine claims about the next one. That is the only
- * input the TanStack integration reacts to.
+ * One index over a mock adapter that answers per page, so a test says what
+ * each page holds and what the engine counted. The core derives every page's
+ * neighbours from those two, and they are all the integration reacts to.
  */
 export const products = (
   options: {
@@ -52,37 +60,23 @@ export const products = (
     /** Hold every answer, so a test can abort a search that is still running. */
     hold?: boolean;
     pageSize?: number;
+    validate?: "error" | "skip";
   } = {},
 ) => {
-  const answer =
-    typeof options.answer === "function" ? options.answer : emptyAnswer;
   const mock = createMockSearchAdapter({
-    sorts: { relevance: null, priceAsc: null },
-    profiles: { default: null },
     hold: options.hold === true,
     response: (request) => {
-      const page = answer(request.page.current);
+      const page = options.answer?.(request.page.current) ?? EMPTY;
+
       return {
         hits: page.documents.map((document) => ({
           document,
           highlights: {},
           native: { score: 1 },
         })),
-        page: {
-          kind: "page",
-          current: request.page.current,
-          size: request.page.size,
-          next: page.next,
-          previous: request.page.current > 1 ? request.page.current - 1 : null,
-        },
-        total: {
-          value: page.documents.length,
-          accuracy: "exact",
-          scope: "matches",
-        },
+        total: page.total,
         facets: {
           brand: {
-            field: "brand",
             values: [{ value: "Nike", count: page.documents.length }],
             exhaustive: true,
             native: null,
@@ -97,14 +91,18 @@ export const products = (
   const declaration = index({
     schema: ProductSchema,
     id: (product) => product.id,
+    searchable: ["name", "brand"],
     filterable: ["brand", "price"],
-    facetable: ["brand"],
+    facetable: { brand: "string" },
     highlightable: ["name"],
-    sorts: ["relevance", "priceAsc"],
-    profiles: ["default"],
-    adapter: mock.adapter,
+    sorts: { priceAsc: { price: "asc" } },
+    validate: options.validate ?? "error",
   });
-  const scout = new Scout({ indexes: { products: declaration } });
+
+  const scout = new Scout({
+    indexes: { products: declaration },
+    adapters: { products: mock.adapter },
+  });
 
   return {
     mock,
@@ -112,6 +110,6 @@ export const products = (
     search: scout
       .index("products")
       .search("shoe")
-      .pageSize(options.pageSize ?? 20),
+      .page({ size: options.pageSize ?? 20 }),
   };
 };

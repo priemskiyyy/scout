@@ -1,9 +1,9 @@
 import { QueryClient } from "@tanstack/query-core";
-import { SearchAbortedError } from "@priemskiyyy/scout";
 import { expect, test } from "vitest";
+
 import { products } from "src/products.fixture";
-import { queryOptions } from "src/queryOptions";
 import type { Product } from "src/products.fixture";
+import { queryOptions } from "src/queryOptions";
 
 const product = (id: string): Product => ({
   id,
@@ -19,13 +19,16 @@ test("the query key is the search's own canonical identity", () => {
 
   expect(queryOptions(search).queryKey).toEqual(search.key());
   expect(queryOptions(search).queryKey).not.toEqual(
-    queryOptions(search.page(2)).queryKey,
+    queryOptions(search.page({ current: 2 })).queryKey,
   );
 });
 
 test("the query function executes the search and answers with its result", async () => {
   const { mock, search } = products({
-    answer: () => ({ documents: [product("a")], next: null }),
+    answer: () => ({
+      documents: [product("a")],
+      total: { value: 1, accuracy: "exact", scope: "matches" },
+    }),
   });
 
   const result = await queryOptions(search).queryFn(context());
@@ -39,9 +42,10 @@ test("the signal TanStack supplies reaches the adapter, so cancelling cancels", 
   const controller = new AbortController();
 
   const pending = queryOptions(search).queryFn({ signal: controller.signal });
+
   controller.abort(new Error("the component unmounted"));
 
-  await expect(pending).rejects.toThrowError(SearchAbortedError);
+  await expect(pending).rejects.toMatchObject({ code: "aborted" });
   // The adapter was handed this signal and no other. Without it the mock holds
   // its answer for ever and nothing ever settles.
   expect(mock.requests[0]?.aborted()).toBe(true);
@@ -55,12 +59,17 @@ test("no caching defaults are set, because staleness and retries are the applica
 
 test("the options go into a query client unchanged", async () => {
   const { search } = products({
-    answer: () => ({ documents: [product("a"), product("b")], next: 2 }),
+    answer: () => ({
+      documents: [product("a"), product("b")],
+      total: { value: 2, accuracy: "exact", scope: "matches" },
+    }),
   });
+
   const client = new QueryClient();
   const options = queryOptions(search);
 
   const result = await client.query(options);
+
   await client.ensureQueryData(options);
 
   expect(result.hits.map((hit) => hit.id)).toEqual(["a", "b"]);
@@ -73,6 +82,7 @@ test("cancelling the query in flight aborts the search behind it", async () => {
   const options = queryOptions(search);
 
   const pending = client.fetchQuery({ ...options, retry: false });
+
   await client.cancelQueries({ queryKey: options.queryKey });
 
   expect(mock.requests[0]?.aborted()).toBe(true);

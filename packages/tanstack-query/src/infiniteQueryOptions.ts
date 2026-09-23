@@ -1,27 +1,18 @@
 import type { IndexShape, SearchBuilder, SearchPage } from "@priemskiyyy/scout";
 import type { QueryFunctionContext, QueryKey } from "@tanstack/query-core";
 
-/**
- * Decision D4, in one place. `next` is what the engine claimed, and `size` is
- * how many hits the page was allowed to hold.
- *
- * `"unknown"` is an engine that cannot say whether another page exists. A page
- * that came back full is the only evidence there may be more, so that is the
- * only case this advances on. The known cost is one wasted request whenever the
- * real last page happens to be exactly full; the alternative silently truncates
- * results, and inventing a page count would break the core's promise that
- * uncertainty is preserved rather than guessed.
- */
-const nextPage = (page: SearchPage, hits: number): number | undefined => {
+// The core says "unknown" only for a page that came back full, which is the
+// one sign there may be more, so the list asks for the next page. When the
+// real last page happens to be exactly full, that costs one empty request.
+const getNextPage = (page: SearchPage): number | undefined => {
   if (typeof page.next === "number") {
     return page.next;
   }
-  if (page.next === null) {
-    return undefined;
-  }
-  if (hits === page.size) {
+
+  if (page.next === "unknown") {
     return page.current + 1;
   }
+
   return undefined;
 };
 
@@ -48,7 +39,7 @@ export const infiniteQueryOptions = <
 
   // The marker goes after the namespace rather than at the end, so the prefix
   // that reaches every Scout query still reaches this one.
-  const [namespace, ...rest] = search.page(1).key();
+  const [namespace, ...rest] = search.page({ current: 1 }).key();
   const queryKey: QueryKey = [namespace, "infinite", ...rest];
 
   return {
@@ -57,10 +48,9 @@ export const infiniteQueryOptions = <
       pageParam,
       signal,
     }: Pick<QueryFunctionContext<QueryKey, number>, "pageParam" | "signal">) =>
-      search.page(pageParam).execute({ signal }),
+      search.page({ current: pageParam }).execute({ signal }),
     initialPageParam: 1,
-    getNextPageParam: (lastPage: Page) =>
-      nextPage(lastPage.page, lastPage.hits.length + lastPage.skipped),
+    getNextPageParam: (lastPage: Page) => getNextPage(lastPage.page),
     getPreviousPageParam: (firstPage: Page) => firstPage.page.previous,
   };
 };

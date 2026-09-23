@@ -19,7 +19,6 @@ import { queryOptions } from "@priemskiyyy/scout-tanstack-query";
 const { data } = useQuery({
   ...queryOptions(products.search(text).facets("brand").highlight("name")),
   staleTime: 30_000,
-  enabled: text.length > 0,
 });
 
 const names = data?.hits.map((hit) => hit.document.name) ?? [];
@@ -29,9 +28,9 @@ const brands = data?.facets.brand.values ?? [];
 The query key is `search.key()`, the canonical identity of that search, so two
 searches that mean the same thing share a cache entry and two that differ in
 anything that changes results do not. The `signal` TanStack supplies is passed
-into `search.execute({ signal })`, which is what makes an unmounted component or
-a superseded keystroke actually cancel the request rather than only drop its
-answer.
+into `search.execute({ signal })`, so an unmounted component or a superseded
+keystroke settles the query at once, and an adapter whose SDK can cancel a
+request cancels it.
 
 ## Many pages
 
@@ -78,13 +77,13 @@ uncertainty instead of guessing, so this package makes the choice and states it:
 
 - a number is believed and used;
 - `null` ends the list;
-- `"unknown"` advances to `page.current + 1` only while the last page came back
-  full, meaning `hits.length + skipped === page.size`, and ends the list otherwise.
+- `"unknown"` advances to `page.current + 1`.
 
-A page that came back short cannot be followed by another one, so stopping there
-is safe. A page that came back full might be the last page, in which case this
-costs one request that returns nothing and then ends the list. That is the price
-of never silently truncating results.
+The core says `"unknown"` only for a page the engine filled, and a short page is
+always `null`, so a full page is the one sign there may be more. If the real
+last page happens to be exactly full, this costs one request that returns
+nothing and then ends the list. That is the price of never silently truncating
+results.
 
 ## Defaults stay yours
 

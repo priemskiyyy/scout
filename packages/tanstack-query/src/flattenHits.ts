@@ -24,6 +24,7 @@ export const flattenHits = <TPage extends { hits: readonly { id: string }[] }>(
       if (seen.has(hit.id)) {
         continue;
       }
+
       seen.add(hit.id);
       hits.push(hit);
     }
