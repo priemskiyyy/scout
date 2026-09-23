@@ -24,6 +24,7 @@ const packages = Object.fromEntries(
             "utf8",
           ),
         );
+
         return [
           metadata.name,
           { directory: `${group}/${directory}`, metadata },
@@ -33,6 +34,7 @@ const packages = Object.fromEntries(
 );
 
 const tag = process.env.RELEASE_TAG;
+
 // A release tag names its package: `<unscoped name>-v<version>`. A version
 // always starts with a digit, so a package name ending in `-v...` is never
 // mistaken for the version suffix.
@@ -44,12 +46,15 @@ const fromTag =
           (name) => name.split("/").at(-1) === tag.replace(/-v\d[\w.+-]*$/, ""),
         ) ?? tag,
       ];
+
 const selected = [...process.argv.slice(2), ...fromTag];
 const names = selected.length === 0 ? Object.keys(packages) : selected;
 
 for (const name of names) {
   const configuration = packages[name];
+
   assert(configuration, `Unknown release package: ${name}`);
+
   const { metadata, directory } = configuration;
 
   assert.equal(metadata.license, "MIT", `${name} must be MIT licensed.`);
@@ -81,6 +86,7 @@ for (const name of names) {
   const entry = changelog
     .split("\n")
     .find((line) => line.startsWith(`## ${name} ${metadata.version} - `));
+
   assert(entry, `${name} ${metadata.version} needs a changelog entry.`);
 
   if (tag !== undefined) {
@@ -94,6 +100,7 @@ for (const name of names) {
       /- \d{4}-\d{2}-\d{2}$/,
       "Date the changelog entry before publishing a release.",
     );
+
     if (process.env.GITHUB_OUTPUT !== undefined) {
       appendFileSync(process.env.GITHUB_OUTPUT, `package=${name}\n`);
     }
