@@ -20,6 +20,12 @@
     "noEmit": true,
     "types": ["node"]
   },
-  "include": ["vitest.config.ts"],
+  "include": [
+    "vitest.config.ts",
+    "vitest.backends.config.ts",
+    "examples/playwright.config.ts",
+    "examples/outpost.spec.ts",
+    "examples/frameworks.spec.ts"
+  ],
   "exclude": ["**/node_modules", "**/dist", ".artifacts", "tasks"]
 }
