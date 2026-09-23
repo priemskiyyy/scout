@@ -1,0 +1,35 @@
+{
+  "name": "@priemskiyyy/scout-elastic-dsl",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The Elasticsearch query language translation the Elasticsearch and OpenSearch adapters share. Private: it is bundled into both, never published.",
+  "type": "module",
+  "license": "MIT",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    }
+  },
+  "scripts": {
+    "build": "tsdown",
+    "lint:typescript": "tsc --noEmit -p .",
+    "lint:eslint": "eslint src",
+    "test:unit": "vitest run --root ../../.. --project elastic-dsl"
+  },
+  "peerDependencies": {
+    "@priemskiyyy/scout": ">=0.1.0 <0.2"
+  },
+  "devDependencies": {
+    "@priemskiyyy/scout": "workspace:*"
+  }
+}
