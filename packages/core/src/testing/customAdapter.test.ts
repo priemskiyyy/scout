@@ -1,259 +1,277 @@
 import { expect, test } from "vitest";
-// Keep adapter construction on public exports to catch gaps in the authoring API.
+
+// The adapter is written on public exports only, which catches a gap in the
+// authoring API before an adapter author does.
 import {
-  assertUnreachable,
-  createSearchAdapter,
-  emptySearchResponse,
+  createHighlightMarkers,
+  matchesFilter,
+  splitHighlight,
+} from "src/adapter";
+import {
   index,
   Scout,
-  UnsupportedSearchFeatureError,
-  type FilterExpression,
-  type SearchCapabilities,
+  ScoutError,
+  type AdapterFacet,
+  type AdapterSort,
+  type HighlightFragment,
+  type SearchAdapter,
 } from "src/index";
 import { testSearchAdapter } from "src/testing/testSearchAdapter";
-import {
-  ProductSchema,
-  product,
-  type Product,
-} from "src/utils/internal/testSchema.fixture";
+import { ProductSchema, product } from "src/utils/internal/testSchema.fixture";
 
-/** The wire shape of some backend an application already owns. */
-type Payload = {
-  q: string;
-  where: string;
-  from: number;
-  size: number;
-  facet: readonly string[];
+const MAX_PAGE_SIZE = 100;
+
+const getFieldValue = (document: object, field: string): unknown =>
+  Object.getOwnPropertyDescriptor(document, field)?.value;
+
+const getTexts = (document: object, field: string): readonly string[] => {
+  const value = getFieldValue(document, field);
+
+  if (typeof value === "string") {
+    return [value];
+  }
+
+  if (Array.isArray(value)) {
+    return value.filter((entry) => typeof entry === "string");
+  }
+
+  return [];
 };
 
-type Body = {
-  rows: readonly { doc: Product; marked?: Record<string, string> }[];
-  matched: number;
-  approximate: boolean;
-  buckets?: Record<string, Record<string, number>>;
+const isQueryMatch = (
+  document: object,
+  searchable: readonly string[],
+  words: readonly string[],
+) =>
+  words.every((word) =>
+    searchable.some((field) =>
+      getTexts(document, field).some((text) =>
+        text.toLowerCase().includes(word),
+      ),
+    ),
+  );
+
+const compareValues = (left: unknown, right: unknown) => {
+  if (typeof left === "number" && typeof right === "number") {
+    return left - right;
+  }
+
+  return String(left).localeCompare(String(right));
 };
 
-const CAPABILITIES: SearchCapabilities = {
-  filters: {
-    eq: true,
-    neq: true,
-    in: false,
-    notIn: false,
-    comparison: true,
-    between: false,
-    booleanComposition: true,
-  },
-  pagination: { maxPageSize: 100 },
-  facets: { resultScoped: true },
-  highlights: "none",
-  cancellation: "transport",
-};
+const getSorted = (
+  documents: readonly object[],
+  sort: AdapterSort | null,
+): readonly object[] => {
+  if (sort === null) {
+    return documents;
+  }
 
-const toWhere = (filter: FilterExpression): string => {
-  if (filter.type === "constant") {
-    return filter.value ? "" : "false";
-  }
-  if (filter.type === "comparison") {
-    return `${filter.field} ${filter.operator} ${JSON.stringify(filter.value)}`;
-  }
-  if (filter.type === "not") {
-    return `not(${toWhere(filter.expression)})`;
-  }
-  if (filter.type === "and" || filter.type === "or") {
-    const joined = filter.expressions
-      .map(toWhere)
-      .join(filter.type === "and" ? " and " : " or ");
-    return `(${joined})`;
-  }
-  return assertUnreachable(filter);
-};
-
-const jsonSearch = (options: {
-  endpoint: string;
-  send: (url: string, body: Payload, signal: AbortSignal) => Promise<Body>;
-  /** The largest page this backend accepts, the way a real one caps it. */
-  maxPageSize?: number;
-}) => {
-  const maxPageSize = options.maxPageSize ?? 100;
-  return createSearchAdapter({
-    name: "json",
-    native: options.send,
-    capabilities: { ...CAPABILITIES, pagination: { maxPageSize } },
-    sorts: { relevance: null, priceAsc: null },
-    profiles: { default: null },
-    reservedOptions: ["q", "where", "from", "size"],
-    fingerprint: () => options.endpoint,
-    search: async (request, { signal }) => {
-      if (request.page.size > maxPageSize) {
-        // A real engine refuses the request rather than quietly trimming it.
-        throw new UnsupportedSearchFeatureError({
-          adapter: "json",
-          feature: "pagination.maxPageSize",
-          message: `The json backend accepts at most ${maxPageSize} results per page.`,
-        });
-      }
-      const where = toWhere(request.filter);
-      if (where === "false") {
-        return emptySearchResponse(request);
-      }
-      const body = await options.send(
-        options.endpoint,
-        {
-          q: request.query,
-          where,
-          from: (request.page.current - 1) * request.page.size,
-          size: request.page.size,
-          facet: request.facets,
-        },
-        signal,
+  return [...documents].sort((left, right) => {
+    for (const { field, direction } of sort.by) {
+      const order = compareValues(
+        getFieldValue(left, field),
+        getFieldValue(right, field),
       );
-      const seen = request.page.current * request.page.size;
-      return {
-        hits: body.rows.map((row) => ({
-          document: row.doc,
-          highlights: {},
-          native: row,
-        })),
-        page: {
-          kind: "page",
-          current: request.page.current,
-          size: request.page.size,
-          next: seen < body.matched ? request.page.current + 1 : null,
-          previous: request.page.current > 1 ? request.page.current - 1 : null,
-        },
-        total: {
-          value: body.matched,
-          accuracy: body.approximate ? "estimated" : "exact",
-          scope: "matches",
-        },
-        facets: Object.fromEntries(
-          request.facets.map((field) => [
-            field,
-            {
-              field,
-              values: Object.entries(body.buckets?.[field] ?? {}).map(
-                ([value, count]) => ({ value, count }),
-              ),
-              exhaustive: "unknown" as const,
-              native: body.buckets?.[field] ?? null,
-            },
-          ]),
-        ),
-        took: null,
-        native: body,
-      };
-    },
-    dispose: () => undefined,
+
+      if (order === 0) {
+        continue;
+      }
+
+      if (direction === "asc") {
+        return order;
+      }
+
+      return -order;
+    }
+
+    return 0;
   });
 };
 
-const CORPUS = [
-  product({ id: "a", brand: "Nike", price: 120 }),
-  product({ id: "b", brand: "Bose", price: 260 }),
-  product({ id: "c", brand: "Sony", price: 90 }),
-];
+const getFacet = (
+  documents: readonly object[],
+  field: string,
+): AdapterFacet => {
+  const counts = new Map<unknown, number>();
 
-const backend = async (
-  _url: string,
-  body: Payload,
-  signal: AbortSignal,
-): Promise<Body> => {
-  if (signal.aborted) {
-    throw new Error("aborted");
+  for (const document of documents) {
+    const value = getFieldValue(document, field);
+
+    counts.set(value, (counts.get(value) ?? 0) + 1);
   }
-  const rows = CORPUS.slice(body.from, body.from + body.size).map((doc) => ({
-    doc,
-  }));
+
   return {
-    rows,
-    matched: CORPUS.length,
-    approximate: false,
-    buckets: body.facet.includes("brand")
-      ? { brand: { Nike: 1, Bose: 1, Sony: 1 } }
-      : {},
+    values: [...counts].map(([value, count]) => ({ value, count })),
+    exhaustive: true,
+    native: null,
   };
 };
 
-const adapter = () =>
-  jsonSearch({ endpoint: "https://api.test/search", send: backend });
+// Marks every occurrence the way a remote engine would, then splits it back
+// into parts with markers made for this search, which is what an adapter over
+// a marking engine does.
+const getHighlights = (
+  document: object,
+  fields: readonly string[],
+  words: readonly string[],
+): Record<string, readonly HighlightFragment[]> => {
+  const markers = createHighlightMarkers();
 
-const FIXTURES = {
-  index: "products",
-  query: "shoe",
-  sort: "relevance",
-  profile: "default",
-  equality: { field: "brand", value: "Nike" },
-  range: { field: "price", min: 50, max: 300 },
-  facet: "brand",
+  const pattern = new RegExp(
+    words.map((word) => word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|"),
+    "gi",
+  );
+
+  const highlights: Record<string, readonly HighlightFragment[]> = {};
+
+  for (const field of fields) {
+    const value = getFieldValue(document, field);
+
+    if (typeof value !== "string" || words.length === 0) {
+      continue;
+    }
+
+    const marked = value.replace(
+      pattern,
+      (match) => `${markers.open}${match}${markers.close}`,
+    );
+
+    highlights[field] = [
+      {
+        path: [field],
+        parts: splitHighlight(marked, markers),
+        truncated: false,
+      },
+    ];
+  }
+
+  return highlights;
 };
 
-testSearchAdapter({
-  name: "a hand written json",
-  createAdapter: adapter,
-  fixtures: FIXTURES,
+/** A whole engine over an array, written the way an application would. */
+const arrayEngine = (
+  documents: readonly object[],
+): SearchAdapter<readonly object[], never, { position: number }> => ({
+  name: "array",
+  native: documents,
+  fingerprint: () => `array:${documents.length}`,
+  search: (request) => {
+    if (request.page.size > MAX_PAGE_SIZE) {
+      throw new ScoutError({
+        code: "unsupported-feature",
+        message: `The array engine returns at most ${MAX_PAGE_SIZE} documents a page.`,
+      });
+    }
+
+    const words = request.query.toLowerCase().split(/\s+/).filter(Boolean);
+
+    const matches = documents.filter(
+      (document) =>
+        matchesFilter(request.filter, document) &&
+        isQueryMatch(document, request.searchable, words),
+    );
+
+    const start = (request.page.current - 1) * request.page.size;
+
+    const page = getSorted(matches, request.sort).slice(
+      start,
+      start + request.page.size,
+    );
+
+    return {
+      hits: page.map((document, position) => ({
+        document,
+        highlights: getHighlights(document, request.highlights, words),
+        native: { position: start + position },
+      })),
+      total: { value: matches.length, accuracy: "exact", scope: "matches" },
+      facets: Object.fromEntries(
+        request.facets.map((field) => [field, getFacet(matches, field)]),
+      ),
+      took: null,
+      native: { matched: matches.length },
+    };
+  },
 });
 
-// Conformance requests must respect the adapter's page-size limit.
+const products = index({
+  schema: ProductSchema,
+  id: (item) => item.id,
+  searchable: ["name", "brand"],
+  filterable: ["brand", "price", "inStock"],
+  facetable: { brand: "string", price: "number", inStock: "boolean" },
+  highlightable: ["name"],
+  sorts: {
+    priceAsc: { price: "asc" },
+    cheapestNamed: { price: "asc", name: "asc" },
+  },
+  profiles: { names: { searchable: ["name"] } },
+});
+
+const CORPUS = [
+  product({ id: "a", name: "Running shoe", brand: "Nike", price: 120 }),
+  product({
+    id: "b",
+    name: "Trail shoe",
+    brand: "Salomon",
+    price: 150,
+    inStock: false,
+  }),
+  product({ id: "c", name: "Walking boot", brand: "Nike", price: 90 }),
+  product({ id: "d", name: "Headphones", brand: "Sony", price: 260 }),
+];
+
 testSearchAdapter({
-  name: "a hand written json that caps its pages",
-  createAdapter: () =>
-    jsonSearch({
-      endpoint: "https://api.test/search",
-      send: backend,
-      maxPageSize: 1,
-    }),
-  fixtures: FIXTURES,
+  name: "a hand written array",
+  index: products,
+  createAdapter: () => arrayEngine(CORPUS),
+  evaluates: true,
+  fixtures: {
+    query: "shoe",
+    equality: { field: "brand", value: "Nike" },
+    range: { field: "price", min: 100, max: 200 },
+  },
 });
 
 test("a hand written adapter works through Scout like any other", async () => {
-  const products = index({
-    schema: ProductSchema,
-    id: (item) => item.id,
-    filterable: ["brand", "price"],
-    facetable: ["brand"],
-    highlightable: [],
-    sorts: ["relevance", "priceAsc"],
-    profiles: ["default"],
-    adapter: adapter(),
+  const scout = new Scout({
+    indexes: { products },
+    adapters: { products: arrayEngine(CORPUS) },
   });
-  const scout = new Scout({ indexes: { products } });
 
   const result = await scout
     .index("products")
-    .search("shoe")
-    .where((item) => item.price.lte(300))
+    .search("")
+    .where((item) => item.price.lte(200))
+    .sort("priceAsc")
     .facets("brand")
-    .pageSize(2)
+    .page({ size: 2 })
     .execute();
 
-  expect(result.hits.map((hit) => hit.id)).toEqual(["a", "b"]);
+  expect(result.hits.map((hit) => hit.id)).toEqual(["c", "a"]);
   expect(result.total).toEqual({
     value: 3,
     accuracy: "exact",
     scope: "matches",
   });
   expect(result.page.next).toBe(2);
-  expect(result.facets.brand.values).toHaveLength(3);
+  expect(result.facets.brand.values).toEqual([
+    { value: "Nike", count: 2 },
+    { value: "Salomon", count: 1 },
+  ]);
 });
 
-test("a capability it declared false is refused before the backend is reached", async () => {
-  const products = index({
-    schema: ProductSchema,
-    id: (item) => item.id,
-    filterable: ["brand"],
-    facetable: [],
-    highlightable: [],
-    sorts: ["relevance"],
-    profiles: ["default"],
-    adapter: adapter(),
+test("what the engine cannot serve is refused, and the refusal reaches the caller", async () => {
+  const scout = new Scout({
+    indexes: { products },
+    adapters: { products: arrayEngine(CORPUS) },
   });
-  const scout = new Scout({ indexes: { products } });
 
   await expect(
-    scout
-      .index("products")
-      .search("shoe")
-      .where((item) => item.brand.in(["Nike"]))
-      .execute(),
-  ).rejects.toThrowError(/cannot translate the in filter/);
+    scout.index("products").search("shoe").page({ size: 101 }).execute(),
+  ).rejects.toMatchObject({
+    code: "unsupported-feature",
+    message: "The array engine returns at most 100 documents a page.",
+  });
 });
