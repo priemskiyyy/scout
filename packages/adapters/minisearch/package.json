@@ -1,7 +1,7 @@
 {
   "name": "@priemskiyyy/scout-minisearch",
   "version": "0.1.0",
-  "description": "MiniSearch adapter for Scout: an in-process index behind the portable search contract, with exact totals, real filtering, and the facets, sorts and highlights MiniSearch cannot honour declared unsupported rather than emulated.",
+  "description": "MiniSearch adapter for Scout: an in-process index behind the portable search contract, with exact totals, filters and sorts over every match, and the facets and highlights MiniSearch cannot produce refused rather than emulated.",
   "type": "module",
   "license": "MIT",
   "repository": {

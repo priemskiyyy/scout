@@ -1,39 +1,24 @@
-import { SearchConfigurationError } from "@priemskiyyy/scout";
-import type {
-  AdapterSearchRequest,
-  FilterExpression,
-  FilterOperator,
-  SearchAdapter,
-} from "@priemskiyyy/scout";
+import { Scout } from "@priemskiyyy/scout";
+import type { AdapterSearchRequest } from "@priemskiyyy/scout";
+import MiniSearch from "minisearch";
 import { expect, test } from "vitest";
+
 import { minisearch } from "src/minisearch";
+import { createProductIndex, productIndex } from "src/minisearch.fixture";
 import type { MiniSearchIndex } from "src/types/MiniSearchIndex";
-import type { MiniSearchOptions } from "src/types/MiniSearchOptions";
 import type { MiniSearchProfile } from "src/types/MiniSearchProfile";
-import type { MiniSearchResult } from "src/types/MiniSearchResult";
-import type { MiniSearchSearchOptions } from "src/types/MiniSearchSearchOptions";
-import {
-  createProductIndex,
-  PRODUCTS,
-  resolveProduct,
-} from "src/minisearch.fixture";
 
-const PROFILES: MiniSearchOptions["profiles"] = {
-  default: { fields: ["title", "category", "tags"], prefix: true },
-};
+type Wildcard = typeof MiniSearch.wildcard;
 
-const SORTS: MiniSearchOptions["sorts"] = { relevance: "relevance" };
-
-const MATCH_ALL: FilterExpression = { type: "constant", value: true };
-
-const request = (
-  overrides: Partial<AdapterSearchRequest<never>> = {},
-): AdapterSearchRequest<never> => ({
+const getRequest = (
+  overrides: Partial<AdapterSearchRequest<MiniSearchProfile>> = {},
+): AdapterSearchRequest<MiniSearchProfile> => ({
   index: "products",
   query: "shoe",
+  searchable: ["title", "category", "tags"],
   profile: "default",
-  sort: "relevance",
-  filter: MATCH_ALL,
+  sort: null,
+  filter: null,
   facets: [],
   highlights: [],
   page: { current: 1, size: 10 },
@@ -41,406 +26,159 @@ const request = (
   ...overrides,
 });
 
-const comparison = (
-  field: string,
-  operator: FilterOperator,
-  value: unknown,
-): FilterExpression => ({ type: "comparison", field, operator, value });
+/** The real index, with every query it received recorded. */
+const setup = () => {
+  const products = createProductIndex();
+  const queries: (string | Wildcard)[] = [];
 
-const createAdapter = () =>
-  minisearch({
-    index: createProductIndex(),
-    revision: () => "v1",
-    profiles: PROFILES,
-    sorts: SORTS,
-  });
+  const recording: MiniSearchIndex<Wildcard> = {
+    search: (query, options) => {
+      queries.push(query);
 
-// The configured names live in the returned type, so tests hold the adapter
-// through the contract rather than through one configuration's names.
-type Adapter = SearchAdapter<
-  MiniSearchIndex,
-  MiniSearchProfile,
-  MiniSearchResult,
-  readonly MiniSearchResult[] | null
->;
-
-const search = (
-  adapter: Adapter,
-  overrides: Partial<AdapterSearchRequest<never>> = {},
-) =>
-  adapter.search(request(overrides), { signal: new AbortController().signal });
-
-const idsOf = (hits: readonly { native: MiniSearchResult }[]): string[] =>
-  hits.map((hit) => String(hit.native.id)).sort();
-
-/** Wraps an instance so a test can assert what reached the engine. */
-const recordingIndex = (index: MiniSearchIndex) => {
-  const calls: {
-    query: string;
-    options: MiniSearchSearchOptions | undefined;
-  }[] = [];
-  return {
-    calls,
-    index: {
-      search: (query: string, options?: MiniSearchSearchOptions) => {
-        calls.push({ query, options });
-        return index.search(query, options);
-      },
+      return products.search(query, options);
     },
   };
+
+  const adapter = minisearch({
+    index: recording,
+    wildcard: MiniSearch.wildcard,
+    revision: () => "v1",
+  });
+
+  return { queries, adapter };
 };
 
-test("it declares only what MiniSearch can actually do", () => {
-  const adapter = createAdapter();
+const getScout = () => {
+  const { queries, adapter } = setup();
 
-  expect(adapter.name).toBe("minisearch");
-  expect(adapter.capabilities.filters).toEqual({
-    eq: true,
-    neq: true,
-    in: true,
-    notIn: true,
-    comparison: true,
-    between: true,
-    booleanComposition: true,
+  const scout = new Scout({
+    indexes: { products: productIndex },
+    adapters: { products: adapter },
   });
-  expect(adapter.capabilities.pagination).toEqual({
-    maxPageSize: null,
-  });
-  expect(adapter.capabilities.facets).toEqual({
-    resultScoped: false,
-  });
-  expect(adapter.capabilities.highlights).toBe("none");
-  expect(adapter.capabilities.cancellation).toBe("logical");
-  expect(adapter.reservedOptions).toEqual(["filter"]);
-  adapter.dispose();
-});
 
-test("stored fields are the document when the instance stores every schema field", async () => {
-  const adapter = createAdapter();
-  const response = await search(adapter);
+  return { queries, products: scout.index("products") };
+};
 
-  expect(idsOf(response.hits)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
-  expect(response.hits[0]?.document).toEqual(
-    PRODUCTS.find(
-      (product) => product.id === String(response.hits[0]?.native.id),
-    ),
-  );
-  adapter.dispose();
-});
+const getRejection = async (run: () => unknown) => {
+  try {
+    await run();
+  } catch (error) {
+    return error;
+  }
 
-test("a resolver builds the document when MiniSearch stored only a subset", async () => {
-  const resolved: { id: unknown; stored: Readonly<Record<string, unknown>> }[] =
-    [];
-  const adapter = minisearch({
-    index: createProductIndex({ storeFields: ["title"] }),
-    revision: () => "v1",
-    profiles: PROFILES,
-    sorts: SORTS,
-    resolve: (id, stored) => {
-      resolved.push({ id, stored });
-      return resolveProduct(id);
+  throw new Error("The search answered.");
+};
+
+test("creating the adapter asks nothing of the index", () => {
+  const untouchable: MiniSearchIndex = {
+    search: () => {
+      throw new Error("The index was searched.");
     },
-  });
+  };
 
-  const response = await search(adapter, { page: { current: 1, size: 1 } });
-
-  expect(response.hits[0]?.document).toEqual(
-    resolveProduct(response.hits[0]?.native.id),
-  );
-  expect(resolved[0]?.stored).toEqual({
-    title: String(response.hits[0]?.native["title"]),
-  });
-  expect(resolved[0]?.id).toBe(response.hits[0]?.native.id);
-  adapter.dispose();
-});
-
-test("an instance that stores nothing and has no resolver says so itself", async () => {
-  const adapter = minisearch({
-    index: createProductIndex({ storeFields: [] }),
-    revision: () => "v1",
-    profiles: PROFILES,
-    sorts: SORTS,
-  });
-
-  const failure = search(adapter);
-
-  await expect(failure).rejects.toThrowError(SearchConfigurationError);
-  await expect(failure).rejects.toThrowError(/storeFields/);
-  await expect(failure).rejects.toThrowError(/resolve/);
-  adapter.dispose();
+  expect(() =>
+    minisearch({ index: untouchable, revision: () => 1 }),
+  ).not.toThrow();
 });
 
 test("the fingerprint follows the corpus revision", () => {
   let revision = 1;
+
   const adapter = minisearch({
     index: createProductIndex(),
     revision: () => revision,
-    profiles: PROFILES,
-    sorts: SORTS,
   });
 
   const before = adapter.fingerprint();
-  expect(adapter.fingerprint()).toBe(before);
 
   revision = 2;
 
-  expect(adapter.fingerprint()).not.toBe(before);
+  expect(before).toBe("minisearch:1");
   expect(adapter.fingerprint()).toBe("minisearch:2");
-  adapter.dispose();
 });
 
-test("a page is a one based slice of every match", async () => {
-  const adapter = createAdapter();
+test.each([
+  ["a facet", { facets: ["category"] }],
+  ["a highlight", { highlights: ["title"] }],
+])("%s is refused before the index is searched", async (_what, overrides) => {
+  const { queries, adapter } = setup();
 
-  const first = await search(adapter, { page: { current: 1, size: 2 } });
-  const second = await search(adapter, { page: { current: 2, size: 2 } });
-  const third = await search(adapter, { page: { current: 3, size: 2 } });
+  const error = await getRejection(() =>
+    adapter.search(getRequest(overrides), {
+      signal: new AbortController().signal,
+    }),
+  );
 
-  expect(first.page).toEqual({
-    kind: "page",
-    current: 1,
-    size: 2,
-    next: 2,
-    previous: null,
-  });
-  expect(second.page).toEqual({
-    kind: "page",
-    current: 2,
-    size: 2,
-    next: 3,
-    previous: 1,
-  });
-  expect(third.page).toEqual({
-    kind: "page",
-    current: 3,
-    size: 2,
-    next: null,
-    previous: 2,
-  });
-  expect(third.hits).toHaveLength(1);
-  expect(
-    [...idsOf(first.hits), ...idsOf(second.hits), ...idsOf(third.hits)].sort(),
-  ).toEqual(["p1", "p2", "p3", "p4", "p5"]);
-  adapter.dispose();
+  expect(error).toMatchObject({ code: "unsupported-feature" });
+  expect(queries).toEqual([]);
 });
 
-test("the total counts every match rather than the page, and says so exactly", async () => {
-  const adapter = createAdapter();
-  const response = await search(adapter, { page: { current: 1, size: 2 } });
+test.each(["fields", "filter"])(
+  "a provider option Scout writes, %s, is refused before the index is searched",
+  async (key) => {
+    const { queries, products } = getScout();
 
-  expect(response.hits).toHaveLength(2);
-  expect(response.total).toEqual({
-    value: 5,
-    accuracy: "exact",
-    scope: "matches",
-  });
-  adapter.dispose();
+    const error = await getRejection(() =>
+      products
+        .search("shoe")
+        .provider(Object.fromEntries([[key, ["title"]]]))
+        .execute(),
+    );
+
+    expect(error).toMatchObject({
+      code: "configuration",
+      message: `provider.${key} is written by Scout from the search itself.`,
+    });
+    expect(queries).toEqual([]);
+  },
+);
+
+test("it reports no time of its own and keeps the raw answer", async () => {
+  const response = await setup().adapter.search(
+    getRequest({ page: { current: 1, size: 1 } }),
+    { signal: new AbortController().signal },
+  );
+
+  expect(response.took).toBeNull();
+  expect(response.facets).toEqual({});
+  expect(response.hits).toHaveLength(1);
+  // The whole answer, before Scout sorted or paged it.
+  expect(response.native).toHaveLength(5);
 });
 
-test("a filter narrows every match, not the page that came back", async () => {
-  const adapter = createAdapter();
-  const filter = comparison("category", "eq", "footwear");
+test("through a Scout, a refusal reaches the caller as it was thrown", async () => {
+  const error = await getRejection(() =>
+    getScout().products.search("shoe").facets("category").execute(),
+  );
 
-  const first = await search(adapter, {
-    filter,
-    page: { current: 1, size: 2 },
-  });
-  const second = await search(adapter, {
-    filter,
-    page: { current: 2, size: 2 },
-  });
+  expect(error).toMatchObject({ code: "unsupported-feature" });
+});
 
-  // Three footwear products match. A predicate applied to one returned page
-  // would have left the total at five and page two empty.
-  expect(first.total).toEqual({
+test("through a Scout, a filter narrows every match, not the page that came back", async () => {
+  const result = await getScout()
+    .products.search("shoe")
+    .where((product) => product.category.eq("footwear"))
+    .page({ size: 1 })
+    .execute();
+
+  expect(result.hits).toHaveLength(1);
+  expect(result.total).toEqual({
     value: 3,
     accuracy: "exact",
     scope: "matches",
   });
-  expect(second.hits).toHaveLength(1);
-  expect([...idsOf(first.hits), ...idsOf(second.hits)].sort()).toEqual([
-    "p1",
-    "p2",
-    "p3",
-  ]);
-  adapter.dispose();
 });
 
-test("every portable operator is translated into the predicate", async () => {
-  const adapter = createAdapter();
-  const matching = async (filter: FilterExpression) =>
-    idsOf((await search(adapter, { filter })).hits);
+test("through a Scout, a sort orders every match before the page is cut", async () => {
+  const search = getScout()
+    .products.search("")
+    .sort("priceAsc")
+    .page({ size: 2 });
 
-  expect(await matching(comparison("category", "neq", "footwear"))).toEqual([
-    "p4",
-    "p5",
-  ]);
-  expect(
-    await matching(comparison("category", "in", ["care", "storage"])),
-  ).toEqual(["p4", "p5"]);
-  expect(
-    await matching(comparison("category", "not-in", ["footwear"])),
-  ).toEqual(["p4", "p5"]);
-  expect(await matching(comparison("price", "gt", 100))).toEqual(["p2", "p3"]);
-  expect(await matching(comparison("price", "gte", 140))).toEqual(["p2", "p3"]);
-  expect(await matching(comparison("price", "lt", 45))).toEqual(["p4"]);
-  expect(await matching(comparison("price", "lte", 45))).toEqual(["p4", "p5"]);
-  expect(await matching(comparison("price", "between", [10, 100]))).toEqual([
-    "p1",
-    "p5",
-  ]);
-  // A repeated field answers when any element answers.
-  expect(await matching(comparison("tags", "eq", "sale"))).toEqual([
-    "p1",
-    "p4",
-    "p5",
-  ]);
-  adapter.dispose();
-});
+  const first = await search.execute();
+  const second = await search.page({ current: 2 }).execute();
 
-test("filters compose with and, or and not", async () => {
-  const adapter = createAdapter();
-  const matching = async (filter: FilterExpression) =>
-    idsOf((await search(adapter, { filter })).hits);
-
-  expect(
-    await matching({
-      type: "and",
-      expressions: [
-        comparison("category", "eq", "footwear"),
-        comparison("price", "lt", 150),
-      ],
-    }),
-  ).toEqual(["p1", "p2"]);
-  expect(
-    await matching({
-      type: "or",
-      expressions: [
-        comparison("category", "eq", "care"),
-        comparison("category", "eq", "storage"),
-      ],
-    }),
-  ).toEqual(["p4", "p5"]);
-  expect(
-    await matching({
-      type: "not",
-      expression: comparison("tags", "eq", "sale"),
-    }),
-  ).toEqual(["p2", "p3"]);
-  adapter.dispose();
-});
-
-test("a contradiction answers without asking the engine", async () => {
-  const recording = recordingIndex(createProductIndex());
-  const adapter = minisearch({
-    index: recording.index,
-    revision: () => "v1",
-    profiles: PROFILES,
-    sorts: SORTS,
-  });
-
-  const response = await search(adapter, {
-    filter: { type: "constant", value: false },
-  });
-
-  expect(recording.calls).toEqual([]);
-  expect(response.hits).toEqual([]);
-  expect(response.total).toEqual({
-    value: 0,
-    accuracy: "exact",
-    scope: "matches",
-  });
-  // MiniSearch was never asked, so there is no result array of its own to hand
-  // back. An empty one would read as an answer it gave.
-  expect(response.native).toBeNull();
-  adapter.dispose();
-});
-
-// Every sort name reaching the adapter is one its index declared, and an index
-// requires the adapter to cover all of them, so an uncovered name is a hole in
-// this configuration rather than an order MiniSearch cannot produce. Naming
-// what was configured is the fix.
-test("a sort the adapter was not configured with is a configuration error", async () => {
-  const adapter = createAdapter();
-
-  const failure = search(adapter, { sort: "price-asc" });
-
-  await expect(failure).rejects.toThrowError(SearchConfigurationError);
-  await expect(failure).rejects.toThrowError(
-    "The minisearch adapter has no price-asc entry in its sorts. It was configured with relevance.",
-  );
-  await expect(failure).rejects.toMatchObject({ path: "sorts.price-asc" });
-  adapter.dispose();
-});
-
-test("a declared sort name may alias relevance", async () => {
-  const adapter = minisearch({
-    index: createProductIndex(),
-    revision: () => "v1",
-    profiles: PROFILES,
-    sorts: { best: "relevance" },
-  });
-
-  const response = await search(adapter, { sort: "best" });
-
-  expect(idsOf(response.hits)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
-  adapter.dispose();
-});
-
-test("a profile the adapter was not configured with is a configuration error", async () => {
-  const adapter = createAdapter();
-
-  await expect(
-    search(adapter, { profile: "autocomplete" }),
-  ).rejects.toThrowError(SearchConfigurationError);
-  adapter.dispose();
-});
-
-test("the profile shapes the query and native options override it", async () => {
-  const recording = recordingIndex(createProductIndex());
-  const adapter = minisearch({
-    index: recording.index,
-    revision: () => "v1",
-    profiles: { default: { fields: ["category"], prefix: true } },
-    sorts: SORTS,
-  });
-
-  const narrow = await search(adapter);
-  const widened = await adapter.search(
-    { ...request(), provider: { fields: ["title"] } },
-    { signal: new AbortController().signal },
-  );
-
-  expect(narrow.hits).toEqual([]);
-  expect(recording.calls[0]?.options?.fields).toEqual(["category"]);
-  expect(idsOf(widened.hits)).toEqual(["p1", "p2", "p3", "p4", "p5"]);
-  expect(recording.calls[1]?.options?.fields).toEqual(["title"]);
-  expect(recording.calls[1]?.options?.prefix).toBe(true);
-  adapter.dispose();
-});
-
-test("it reports nothing it cannot measure or produce", async () => {
-  const adapter = createAdapter();
-  const response = await search(adapter);
-
-  expect(response.facets).toEqual({});
-  expect(response.took).toBeNull();
-  for (const hit of response.hits) {
-    expect(hit.highlights).toEqual({});
-  }
-  adapter.dispose();
-});
-
-test("the raw MiniSearch answer is preserved on the hit and on the response", async () => {
-  const adapter = createAdapter();
-  const response = await search(adapter, { page: { current: 1, size: 2 } });
-
-  expect(response.native).toHaveLength(5);
-  expect(response.native?.[0]).toBe(response.hits[0]?.native);
-  expect(typeof response.hits[0]?.native.score).toBe("number");
-  expect(response.hits[0]?.native.match).toBeTypeOf("object");
-  expect(Object.values(response.hits[0]?.native.match ?? {}).flat()).toContain(
-    "title",
-  );
-  adapter.dispose();
+  expect(first.hits.map((hit) => hit.id)).toEqual(["p4", "p6"]);
+  expect(second.hits.map((hit) => hit.id)).toEqual(["p5", "p1"]);
+  expect(first.page.next).toBe(2);
 });

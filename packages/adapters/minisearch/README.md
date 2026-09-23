@@ -1,223 +1,130 @@
 # @priemskiyyy/scout-minisearch
 
-[MiniSearch](https://lucaong.github.io/minisearch/) adapter for
-[Scout](../../core). Requires `minisearch` 7.
-
-MiniSearch is a full text index that lives in your process, so this adapter
-implements less of the portable contract than the remote ones do. That is the
-point. Everything MiniSearch cannot answer is declared unsupported and refused
-before the search runs, rather than emulated over the page that happened to come
-back. A search that asks for a facet, an order other than relevance or a
-highlight throws `UnsupportedSearchFeatureError`. It never comes back quietly
-narrower.
-
-What it does declare is real. MiniSearch returns every match, so the total is
-exact over all matches and a page is a slice of the whole result array, and its
-`filter` option runs over every match rather than over one page, so the portable
-filter AST translates into it without narrowing a count that was already
-reported.
-
-## Installation
+The [MiniSearch](https://lucaong.github.io/minisearch/) adapter for
+[Scout](https://priemskiyyy.github.io/scout/). It searches a MiniSearch
+instance your application owns, in process, and does nothing else.
 
 ```sh
 pnpm add @priemskiyyy/scout @priemskiyyy/scout-minisearch minisearch
 ```
 
-The MiniSearch instance is injected, so this package imports no SDK at runtime.
-`src/minisearch.contracts.ts` pins the structural types to the real ones.
+`minisearch` 7 is a peer dependency and the instance is yours. This package
+imports no MiniSearch SDK at runtime. `src/minisearch.contracts.ts` pins its
+structural types to the real ones.
 
-## Create an index
+## Use
 
 ```ts
 import { index, Scout } from "@priemskiyyy/scout";
 import { minisearch } from "@priemskiyyy/scout-minisearch";
 import MiniSearch from "minisearch";
-import { type Product, products, ProductSchema } from "./catalogue";
-
-let catalogueVersion = 1;
 
 const catalogue = new MiniSearch<Product>({
   fields: ["title", "category", "tags"],
   storeFields: ["id", "title", "category", "price", "tags"],
 });
-catalogue.addAll(products);
+
+catalogue.addAll(documents);
+
+let catalogueVersion = 1;
+
+const products = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["title", "category", "tags"],
+  filterable: ["category", "price", "tags"],
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { titles: { searchable: ["title"] } },
+});
 
 const scout = new Scout({
-  indexes: {
-    products: index({
-      schema: ProductSchema,
-      id: (product) => product.id,
-      filterable: ["category", "price", "tags"],
-      facetable: [],
-      highlightable: [],
-      sorts: ["relevance"],
-      profiles: ["default"],
-      adapter: minisearch({
-        index: catalogue,
-        revision: () => catalogueVersion,
-        profiles: {
-          default: { fields: ["title", "category", "tags"], prefix: true },
-        },
-        sorts: { relevance: "relevance" },
-      }),
+  indexes: { products },
+  adapters: {
+    products: minisearch({
+      index: catalogue,
+      wildcard: MiniSearch.wildcard,
+      revision: () => catalogueVersion,
+      profiles: { titles: { prefix: true, fuzzy: 0.2 } },
     }),
   },
 });
 
 const result = await scout
   .index("products")
-  .search("boot")
-  .where((field) => field.category.eq("footwear"))
+  .search("shoe")
+  .where((product) => product.category.eq("footwear"))
+  .sort("priceAsc")
   .execute();
 ```
 
+## Options
+
+| Option     | What it is                                                                                                                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index`    | The MiniSearch instance. The adapter only calls `search` on it.                                                                                                                                 |
+| `wildcard` | `MiniSearch.wildcard`, from minisearch 7.2. An empty query browses every document through it. The adapter imports no SDK, so it cannot name the symbol itself. Without it, browsing is refused. |
+| `revision` | Returns a new value whenever the corpus changes. It joins the fingerprint, so a rebuilt index gets new cache keys instead of answers computed from the corpus it replaced.                      |
+| `resolve`  | Builds the document from a result's id and stored fields. Required unless every schema field is stored.                                                                                         |
+| `profiles` | MiniSearch tuning for the index's profiles, keyed by profile name: `prefix`, `fuzzy`, `maxFuzzy`, `boost`, `weights`, `combineWith` and `bm25`. The fields a profile searches are the index's.  |
+
+A search's `.provider()` options are the same tuning, merged over the
+profile's. `fields` and `filter` are written by Scout, so passing either is a
+configuration error.
+
 ## Stored fields are not the document
 
-A MiniSearch result carries the document id, the score, the match report and
-only the fields listed in `storeFields`. That is usually not the whole
-application document, and Scout validates the whole document against the index
-schema, so this adapter needs to be told which of the two situations it is in.
+A MiniSearch result carries the id, the score, the match report and only the
+fields in `storeFields`, and Scout validates the whole document against the
+index schema. When every schema field is stored, leave `resolve` off: the
+document is the stored fields plus MiniSearch's `id`. When only some are, pass
+`resolve` and build the document from the id. If the instance stores nothing
+and there is no resolver, the search fails with a configuration error naming
+both, rather than with a schema error listing every missing field.
 
-**Every schema field is stored.** Leave `resolve` off. The document Scout
-validates is the result's stored fields plus MiniSearch's `id`. If the instance
-stored nothing at all, the adapter throws a `SearchConfigurationError` naming
-`storeFields` and `resolve`, so the failure arrives as the configuration mistake
-it is instead of as a schema error listing every missing field.
+Filters and sorts read the same document a hit carries, so a filterable or
+sortable field must be stored or produced by `resolve`. The resolver runs for
+every match a filtered or sorted search considers, so keep it to a lookup.
 
-**Only some schema fields are stored.** Pass `resolve`, and the adapter builds
-the document from the id and the stored record. It runs before validation, so
-what it returns is what the schema sees.
+## What it does
 
-```ts
-minisearch({
-  index: catalogue,
-  revision: () => catalogueVersion,
-  resolve: (id) => documentsById.get(String(id)),
-  profiles: { default: { fields: ["title"] } },
-  sorts: { relevance: "relevance" },
-});
-```
+MiniSearch answers with every match at once, and that is what makes the rest
+honest:
 
-Use `resolve` as well when the schema's id field is not named `id`, because the
-adapter cannot see your schema and writes MiniSearch's `id` under that name.
+- The filter runs as MiniSearch's `filter` predicate, over every match before
+  anything is returned, so the total is the filtered count and page two is the
+  real page two.
+- A sort orders every match before the page is cut. Numbers and strings order
+  by value, strings by code unit so the order is the same on every runtime. A
+  missing value sorts last in either direction. `relevance` keeps MiniSearch's
+  score order.
+- The total is exact, and a page is a one based slice of the whole array.
+- `took` is `null`, because MiniSearch reports no timing of its own.
 
-A filter reads the same document a hit will carry. With a resolver that means
-the resolver runs for every match a filtered query considers, not only for the
-page, so keep it to a lookup.
+## What it refuses
 
-## What it can and cannot do
+Each is refused with `unsupported-feature` before the index is searched.
 
-| Capability                | Declared         | Why                                                                                                             |
-| ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------- |
-| `filters.*`               | every one `true` | MiniSearch's `filter` is a predicate over every match, so this is real filtering and not page scoped emulation. |
-| `pagination.page`         | `true`           | A page is a slice of the full result array.                                                                     |
-| `pagination.maxPageSize`  | `null`           | The corpus is already in memory, so no page size is refused.                                                    |
-| `facets.resultScoped`     | `false`          | MiniSearch has no facet index.                                                                                  |
-| `facets.excludeOwnFilter` | `false`          | There are no facets to exclude a filter from.                                                                   |
-| `facets.searchValues`     | `false`          | There are no facet values to search.                                                                            |
-| `highlights`              | `"none"`         | MiniSearch reports which fields a term hit, never where in the text.                                            |
-| `cancellation`            | `"logical"`      | The search runs to completion in process.                                                                       |
+- A facet. MiniSearch has no facet index, so counts could only come from
+  tallying every match on every search.
+- A highlight. MiniSearch reports which fields a term matched, never where in
+  the text, so parts could only be guessed.
+- An empty query without the `wildcard` option.
 
-### Filtering is real, and here is why
-
-MiniSearch's `filter` option takes a predicate and calls it for each candidate
-result while it is still assembling them, before anything is returned. It sees
-every match, not one page. So translating Scout's filter AST into a predicate
-narrows the set MiniSearch itself counted: the total stays exact, page two is
-still the real page two, and a filtered search is not a page of an unfiltered
-one. That is what makes `eq`, `neq`, `in`, `notIn`, the comparisons, `between`
-and boolean composition all honest `true`.
-
-The predicate evaluates against the same document the hit will carry, so a
-filter sees exactly what your application sees. A field that is neither stored
-nor produced by `resolve` is absent, and an absent field matches nothing and
-falls inside no range, which is how the remote engines answer for the same
-document. A repeated field answers an operator when any element answers it, the
-way `tags.eq("sale")` reads everywhere else in Scout.
-
-A contradiction is answered without asking the engine at all.
-
-### Facets are refused, not scanned
-
-MiniSearch has no facet index and no facet option. Counts could only be produced
-by materialising every match on every query and tallying it, which is a full
-scan that stays invisible until the corpus grows. Counting the returned page
-instead would be worse: the numbers would be wrong in a way nobody can see.
-`facets.resultScoped` is `false`, so Scout refuses a faceted search here and the
-application finds out at once. If you need facets over a local corpus, the Orama
-adapter has them.
-
-### Only relevance
-
-MiniSearch orders by BM25 score and takes no sort option. Every sort name you
-declare therefore maps to `"relevance"`, and it may be an alias:
-`sorts: { best: "relevance" }` lets an index declare `best` and get score order.
-A request for any other sort name throws `UnsupportedSearchFeatureError`. Sorting
-another way would mean ordering every match on every query, the same hidden full
-scan that rules facets out. A second order belongs in a second MiniSearch
-instance, or in the application.
-
-### No highlights
-
-MiniSearch's `match` maps each matched term to the fields it was found in. It
-carries no offsets, and the tokenizer and term processor that would be needed to
-find them again are the instance's and are not exposed. Parts built from that
-would be guesses, so `highlights` is `"none"` and every hit's highlight record is
-empty. Scout refuses a search that asks for highlights rather than returning
-fabricated ones.
-
-### Aborting does not stop the work
-
-`cancellation` is `"logical"`. MiniSearch is synchronous and in process: by the
-time an abort can be observed the search has already run to completion. Aborting
-stops Scout waiting and makes the core refuse the late answer, which is what
-`"logical"` promises. It does not stop, interrupt or shorten the search itself.
-
-### Totals and pages
-
-MiniSearch returns every match, so the total is `accuracy: "exact"` with
-`scope: "matches"` and `next` is never `"unknown"`. Pages are one based and
-sliced from the full array. `took` is `null`, because MiniSearch reports no
-timing of its own and the core measures the call rather than being handed a
-number this adapter invented.
-
-### Empty queries
-
-MiniSearch finds nothing for an empty query string. `emptyQuery` is an index
-option, not a profile one, so an index either allows an empty query for all its
-profiles or rejects it for all of them. Leave it at the default `"reject"` and
-skip the search while the input is empty, with TanStack's `skipToken` or an
-ordinary guard.
-
-## The corpus revision
-
-A local index is part of what an answer depends on and is not part of the
-request, so `revision` joins the adapter's fingerprint and therefore the query
-identity. Return a new value whenever the corpus changes, and a rebuilt index
-produces new cache keys instead of serving an answer computed from the corpus it
-replaced.
-
-```ts
-let catalogueVersion = 1;
-
-const adapter = minisearch({
-  index: catalogue,
-  revision: () => catalogueVersion,
-  profiles: { default: { fields: ["title"] } },
-  sorts: { relevance: "relevance" },
-});
-
-catalogue.addAll(newArrivals);
-catalogueVersion += 1;
-```
+MiniSearch runs synchronously, so an abort cannot interrupt a search in
+progress. The core stops waiting and refuses the late answer.
 
 ## Native access
 
-`hit.native` is the raw MiniSearch result, including `score` and `match`, and
-`result.native` is the full result array before pagination. Native search
-options go through `.provider()` and are merged over the profile. `filter` is
-reserved, because Scout owns filtering through its AST and a second predicate
-would be invisible to the query identity.
+`hit.native` is the raw MiniSearch result, including `score` and `match`.
+`result.native` is the whole result array, before Scout sorted and paged it.
+
+## Tests
+
+The adapter runs the shared conformance suite from `@priemskiyyy/scout/testing`
+against a real MiniSearch 7.2.0 instance over a small corpus, with the
+semantic checks on, so filters, sorts and pages are checked against the
+documents that come back. Everything runs in process, so there is no remote
+backend left unverified.
 
 ## License
 

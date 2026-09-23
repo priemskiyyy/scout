@@ -6,4 +6,3 @@ export type { MiniSearchOptions } from "src/types/MiniSearchOptions";
 export type { MiniSearchProfile } from "src/types/MiniSearchProfile";
 export type { MiniSearchResult } from "src/types/MiniSearchResult";
 export type { MiniSearchSearchOptions } from "src/types/MiniSearchSearchOptions";
-export type { MiniSearchSort } from "src/types/MiniSearchSort";

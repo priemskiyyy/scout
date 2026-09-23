@@ -1,10 +1,12 @@
+import { index } from "@priemskiyyy/scout";
+import type { StandardSchema } from "@priemskiyyy/scout";
 import MiniSearch from "minisearch";
 
 /**
- * The corpus every test in this package searches. It is deliberately small and
- * deliberately overlapping: several products share a category, several share a
- * tag, and the word "shoe" reaches more than one of them, so a filter that was
- * dropped and a page that was sliced wrongly both show up as a different count.
+ * The corpus every test in this package searches. It is small and it
+ * overlaps: several products share a category or a tag, and "shoe" reaches
+ * more than one of them, so a dropped filter, a wrong sort and a wrongly cut
+ * page each show up as different ids.
  */
 export type Product = {
   id: string;
@@ -62,9 +64,9 @@ export const PRODUCTS: readonly Product[] = [
 ];
 
 /**
- * A real MiniSearch instance over the corpus. `storeFields` is the interesting
- * knob: it decides how much of the document a result carries back, which is the
- * whole reason the adapter takes a document resolver.
+ * A real MiniSearch instance over the corpus. `storeFields` decides how much of
+ * the document a result carries back, which is why the adapter takes a
+ * resolver.
  *
  * @example
  * ```ts
@@ -75,23 +77,67 @@ export const createProductIndex = (
   options: { storeFields?: readonly string[] } = {},
 ): MiniSearch<Product> => {
   const storeFields = options.storeFields ?? PRODUCT_FIELDS;
-  const index = new MiniSearch<Product>({
+
+  const products = new MiniSearch<Product>({
     fields: ["title", "category", "tags"],
     storeFields: [...storeFields],
   });
-  index.addAll([...PRODUCTS]);
-  return index;
+
+  products.addAll([...PRODUCTS]);
+
+  return products;
 };
 
 /**
- * The document resolver an application writes when its `storeFields` is a
- * subset of the schema: the id goes back to wherever the documents already
- * live, and the whole document comes out.
+ * The resolver an application writes when its `storeFields` is a subset of the
+ * schema: the id goes back to wherever the documents already live.
  */
 export const resolveProduct = (id: unknown): Product => {
   const product = PRODUCTS.find((candidate) => candidate.id === id);
-  if (typeof product === "undefined") {
+
+  if (product === undefined) {
     throw new Error(`No product for id ${String(id)}`);
   }
+
   return product;
 };
+
+const isProduct = (value: unknown): value is Product =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "id")?.value === "string" &&
+  typeof Object.getOwnPropertyDescriptor(value, "title")?.value === "string" &&
+  typeof Object.getOwnPropertyDescriptor(value, "price")?.value === "number";
+
+/** Reads a stored document back as the product it is. */
+export const productSchema: StandardSchema<Product> = {
+  "~standard": {
+    version: 1,
+    vendor: "minisearch-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/**
+ * The corpus as an index declares it. Facets and highlights are declared so
+ * the conformance suite sees them refused.
+ */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["title", "category", "tags"],
+  filterable: ["category", "price", "tags"],
+  facetable: { category: "string" },
+  highlightable: ["title"],
+  sorts: {
+    priceAsc: { price: "asc" },
+    categoryThenPrice: { category: "asc", price: "desc" },
+  },
+  profiles: { titles: { searchable: ["title"] } },
+});
