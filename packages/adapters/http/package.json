@@ -1,7 +1,7 @@
 {
   "name": "@priemskiyyy/scout-http",
   "version": "0.1.0",
-  "description": "HTTP adapter for Scout: the plumbing every JSON search endpoint needs, with the request body and the response shape left to the application that owns the backend, plus an opt-in wire format for the ones that own both ends.",
+  "description": "HTTP adapter for Scout: search your own backend through your own client, with the portable search as the request and a decoded wire format, refusals included, as the answer.",
   "type": "module",
   "license": "MIT",
   "repository": {

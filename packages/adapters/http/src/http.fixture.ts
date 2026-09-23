@@ -1,16 +1,16 @@
-import type { FilterExpression } from "@priemskiyyy/scout";
-import { assertUnreachable } from "@priemskiyyy/scout";
-import type { HttpFetch } from "src/types/HttpFetch";
-import type { HttpFetchInit } from "src/types/HttpFetchInit";
-import type { HttpFetchResponse } from "src/types/HttpFetchResponse";
+import { index } from "@priemskiyyy/scout";
+import type {
+  AdapterSearchRequest,
+  AdapterSort,
+  HighlightPart,
+  StandardSchema,
+} from "@priemskiyyy/scout";
+import { matchesFilter } from "@priemskiyyy/scout/adapter";
 
-/**
- * A backend in memory. It speaks the scout wire format and really evaluates
- * what it is sent: the query, every filter operator, facet counts over the
- * matched set and highlights that rejoin to the original text. That is what
- * lets the conformance suite assert which documents came back rather than only
- * that a request was well formed.
- */
+import type { HttpRequest } from "src/types/HttpRequest";
+import type { ScoutWireRefusal } from "src/types/ScoutWireRefusal";
+import type { ScoutWireResponse } from "src/types/ScoutWireResponse";
+
 export type FixtureProduct = {
   id: string;
   title: string;
@@ -57,288 +57,276 @@ export const PRODUCTS: readonly FixtureProduct[] = [
   },
 ];
 
-/** What the fake reads out of a request, whichever way it arrived. */
-type BackendRequest = {
-  query: string;
-  filter: FilterExpression;
-  facets: readonly string[];
-  highlights: readonly string[];
-  readonly page: { readonly current: number; readonly size: number };
-};
-
-export type FixtureCall = { url: string; init: HttpFetchInit };
-
 export type FixtureBackend = {
-  fetch: HttpFetch;
-  /** Every call the adapter made, in order, with the init it passed. */
-  calls: readonly FixtureCall[];
+  /** An application's own client, as `http()` takes it. */
+  request: (
+    request: HttpRequest<unknown>,
+  ) => Promise<ScoutWireResponse | ScoutWireRefusal>;
+  /** Every request the adapter made, in order. */
+  requests: readonly HttpRequest<unknown>[];
 };
 
 export type FixtureBackendOptions = {
-  /** Answers with this status instead of searching. */
-  status?: number;
-  /** Answers with this exact text, for a body the format does not describe. */
-  body?: string;
-  /** Never answers until the signal aborts, for the cancellation tests. */
+  /** Answers with exactly this, for an answer the corpus would not give. */
+  answer?: ScoutWireResponse;
+  /** Refuses every search with this message, in the wire format's refusal. */
+  refusal?: string;
+  /** Rejects with this, as a client does on a failed status. */
+  fail?: unknown;
+  /** Never answers until the signal aborts. */
   pending?: boolean;
   /** Reported as `took`. */
   took?: number;
 };
 
-const valueOf = (document: FixtureProduct, field: string): unknown => {
-  const record: Readonly<Record<string, unknown>> = document;
-  return record[field];
-};
+const getFieldValue = (document: FixtureProduct, field: string): unknown =>
+  Object.getOwnPropertyDescriptor(document, field)?.value;
 
-const compare = (left: unknown, right: unknown): number | null => {
+const compareValues = (left: unknown, right: unknown) => {
   if (typeof left === "number" && typeof right === "number") {
     return left - right;
   }
-  if (typeof left === "string" && typeof right === "string") {
-    if (left < right) {
-      return -1;
+
+  return String(left).localeCompare(String(right));
+};
+
+const getSorted = (
+  documents: readonly FixtureProduct[],
+  sort: AdapterSort | null,
+) => {
+  if (sort === null) {
+    return documents;
+  }
+
+  return [...documents].sort((left, right) => {
+    for (const { field, direction } of sort.by) {
+      const order = compareValues(
+        getFieldValue(left, field),
+        getFieldValue(right, field),
+      );
+
+      if (order === 0) {
+        continue;
+      }
+
+      if (direction === "asc") {
+        return order;
+      }
+
+      return -order;
     }
-    if (left > right) {
-      return 1;
-    }
+
     return 0;
-  }
-  return null;
+  });
 };
 
-const matchesComparison = (
-  document: FixtureProduct,
-  node: Extract<FilterExpression, { type: "comparison" }>,
-): boolean => {
-  const actual = valueOf(document, node.field);
-  const values = Array.isArray(node.value) ? node.value : [];
-  if (node.operator === "eq") {
-    return actual === node.value;
-  }
-  if (node.operator === "neq") {
-    return actual !== node.value;
-  }
-  if (node.operator === "in") {
-    return values.includes(actual);
-  }
-  if (node.operator === "not-in") {
-    return !values.includes(actual);
-  }
-  if (node.operator === "between") {
-    const [min, max] = values;
-    const low = compare(actual, min);
-    const high = compare(actual, max);
-    return low !== null && low >= 0 && high !== null && high <= 0;
-  }
-  const order = compare(actual, node.value);
-  if (order === null) {
-    return false;
-  }
-  if (node.operator === "gt") {
-    return order > 0;
-  }
-  if (node.operator === "gte") {
-    return order >= 0;
-  }
-  if (node.operator === "lt") {
-    return order < 0;
-  }
-  if (node.operator === "lte") {
-    return order <= 0;
-  }
-  return assertUnreachable(node.operator);
-};
-
-const matches = (
-  filter: FilterExpression,
-  document: FixtureProduct,
-): boolean => {
-  if (filter.type === "constant") {
-    return filter.value;
-  }
-  if (filter.type === "comparison") {
-    return matchesComparison(document, filter);
-  }
-  if (filter.type === "not") {
-    return !matches(filter.expression, document);
-  }
-  if (filter.type === "and") {
-    return filter.expressions.every((child) => matches(child, document));
-  }
-  if (filter.type === "or") {
-    return filter.expressions.some((child) => matches(child, document));
-  }
-  return assertUnreachable(filter);
-};
-
-/** Keeps every character, so the parts rejoin to exactly the field. */
-const partsOf = (
-  text: string,
-  term: string,
-): readonly { text: string; matched: boolean }[] => {
+// Every character is kept, so the parts rejoin to exactly the field.
+const getParts = (text: string, term: string) => {
   if (term === "") {
     return [{ text, matched: false }];
   }
+
   const parts: { text: string; matched: boolean }[] = [];
   const haystack = text.toLowerCase();
   let cursor = 0;
   let found = haystack.indexOf(term, cursor);
+
   while (found !== -1) {
     if (found > cursor) {
       parts.push({ text: text.slice(cursor, found), matched: false });
     }
+
     parts.push({ text: text.slice(found, found + term.length), matched: true });
     cursor = found + term.length;
     found = haystack.indexOf(term, cursor);
   }
+
   if (cursor < text.length) {
     parts.push({ text: text.slice(cursor), matched: false });
   }
+
   return parts;
 };
 
-const highlightsFor = (
+const getHighlights = (
   document: FixtureProduct,
   fields: readonly string[],
-  query: string,
+  term: string,
 ) => {
-  const highlights: Record<string, unknown[]> = {};
+  const highlights: Record<
+    string,
+    { path: string[]; parts: HighlightPart[]; truncated: boolean }[]
+  > = {};
+
   for (const field of fields) {
-    const text = valueOf(document, field);
+    const text = getFieldValue(document, field);
+
     if (typeof text !== "string") {
       continue;
     }
+
     highlights[field] = [
-      {
-        path: [field],
-        parts: partsOf(text, query.trim().toLowerCase()),
-        truncated: false,
-      },
+      { path: [field], parts: getParts(text, term), truncated: false },
     ];
   }
+
   return highlights;
 };
 
-const facetsFor = (
+const getFacets = (
   documents: readonly FixtureProduct[],
   fields: readonly string[],
 ) => {
-  const facets: Record<string, unknown> = {};
+  const facets: Record<
+    string,
+    { values: { value: string | number; count: number }[]; exhaustive: boolean }
+  > = {};
+
   for (const field of fields) {
-    const counts = new Map<unknown, number>();
+    const counts = new Map<string | number, number>();
+
     for (const document of documents) {
-      const value = valueOf(document, field);
+      const value = getFieldValue(document, field);
+
+      if (typeof value !== "string" && typeof value !== "number") {
+        continue;
+      }
+
       counts.set(value, (counts.get(value) ?? 0) + 1);
     }
+
     facets[field] = {
       values: [...counts].map(([value, count]) => ({ value, count })),
       exhaustive: true,
     };
   }
+
   return facets;
 };
 
-const parseParam = (value: string | null) => {
-  if (value === null) {
-    return undefined;
-  }
-  return JSON.parse(value);
-};
+const isQueryMatch = (
+  document: FixtureProduct,
+  searchable: readonly string[],
+  term: string,
+) =>
+  searchable.some((field) => {
+    const text = getFieldValue(document, field);
 
-/**
- * A GET carries the same request in the query string: a string travels as
- * itself and everything else as JSON, which is what the adapter documents.
- */
-const fromQuery = (url: string) => {
-  const params = new URL(url, "http://fixture.test").searchParams;
-  return {
-    query: params.get("query"),
-    filter: parseParam(params.get("filter")),
-    facets: parseParam(params.get("facets")),
-    highlights: parseParam(params.get("highlights")),
-    page: parseParam(params.get("page")),
-  };
-};
+    return typeof text === "string" && text.toLowerCase().includes(term);
+  });
 
-const readRequest = (url: string, init: HttpFetchInit): BackendRequest => {
-  const sent =
-    typeof init.body === "string" ? JSON.parse(init.body) : fromQuery(url);
-  // A custom mapping sends whatever its own backend expects, so the fake fills
-  // in what a search means without the fields that mapping did not send.
-  return {
-    query: typeof sent.query === "string" ? sent.query : "",
-    filter: sent.filter ?? { type: "constant", value: true },
-    facets: sent.facets ?? [],
-    highlights: sent.highlights ?? [],
-    page: sent.page ?? { current: 1, size: 10 },
-  };
-};
+const getAnswer = (
+  sent: AdapterSearchRequest<unknown>,
+  took: number | undefined,
+): ScoutWireResponse => {
+  const term = sent.query.trim().toLowerCase();
 
-const runSearch = (request: BackendRequest, took: number | undefined) => {
-  const term = request.query.trim().toLowerCase();
   const matched = PRODUCTS.filter(
     (product) =>
-      product.title.toLowerCase().includes(term) &&
-      matches(request.filter, product),
+      matchesFilter(sent.filter, product) &&
+      isQueryMatch(product, sent.searchable, term),
   );
-  const from = (request.page.current - 1) * request.page.size;
-  return {
-    hits: matched.slice(from, from + request.page.size).map((document) => ({
-      document,
-      highlights: highlightsFor(document, request.highlights, request.query),
-      // A backend is free to add its own keys; they arrive on `hit.native`.
-      score: 1 / (PRODUCTS.indexOf(document) + 1),
-    })),
+
+  const from = (sent.page.current - 1) * sent.page.size;
+
+  const answer: ScoutWireResponse = {
+    hits: getSorted(matched, sent.sort)
+      .slice(from, from + sent.page.size)
+      .map((document) => ({
+        document,
+        highlights: getHighlights(document, sent.highlights, term),
+        // A backend is free to add its own keys; they arrive on `hit.native`.
+        score: 1 / (PRODUCTS.indexOf(document) + 1),
+      })),
     total: { value: matched.length, accuracy: "exact", scope: "matches" },
-    facets: facetsFor(matched, request.facets),
-    took: took ?? null,
+    facets: getFacets(matched, sent.facets),
   };
+
+  if (took !== undefined) {
+    answer.took = took;
+  }
+
+  return answer;
 };
 
-const respond = (status: number, text: string): HttpFetchResponse => ({
-  ok: status >= 200 && status < 300,
-  status,
-  text: async () => text,
-});
-
 /**
- * A fake fetch over `PRODUCTS`, in the shape the adapter calls.
+ * A backend in memory behind an application's own client. It receives the
+ * search as JSON, as a real one would, and really evaluates it: the query
+ * over the searchable fields, the filter, the sort, the page, facet counts
+ * over the matched set, and highlights that rejoin to the original text.
  *
  * @example
  * ```ts
  * const backend = createSearchBackend();
- * const adapter = http({ endpoint: "https://api.test/search", fetch: backend.fetch, ... });
+ * const adapter = http({ fingerprint: "catalogue-api", request: backend.request });
  * ```
  */
 export const createSearchBackend = (
   options: FixtureBackendOptions = {},
 ): FixtureBackend => {
-  const calls: FixtureCall[] = [];
+  const requests: HttpRequest<unknown>[] = [];
 
-  const fetch: HttpFetch = async (url, init) => {
-    calls.push({ url, init });
+  const request = async (
+    sent: HttpRequest<unknown>,
+  ): Promise<ScoutWireResponse | ScoutWireRefusal> => {
+    requests.push(sent);
+
+    // A client rejects once its request is aborted, and holding the promise
+    // open until then is what proves the signal really arrived.
     if (options.pending === true) {
-      // Fetch rejects when the connection is aborted, and holding the promise
-      // open until then is what lets a test prove the signal really arrived
-      // rather than the caller having walked away from it.
-      return await new Promise<HttpFetchResponse>((_, reject) => {
-        init.signal.addEventListener("abort", () => {
+      return await new Promise<ScoutWireResponse>((_resolve, reject) => {
+        sent.signal.addEventListener("abort", () => {
           reject(new Error("The fixture backend request was aborted."));
         });
       });
     }
-    const status = options.status ?? 200;
-    if (typeof options.body === "string") {
-      return respond(status, options.body);
+
+    if (options.fail !== undefined) {
+      throw options.fail;
     }
-    if (status >= 300) {
-      return respond(status, `{"error":"the fixture refused with ${status}"}`);
+
+    if (options.answer !== undefined) {
+      return options.answer;
     }
-    return respond(
-      status,
-      JSON.stringify(runSearch(readRequest(url, init), options.took)),
-    );
+
+    if (typeof options.refusal === "string") {
+      return { refusal: { message: options.refusal } };
+    }
+
+    return getAnswer(JSON.parse(JSON.stringify(sent.search)), options.took);
   };
 
-  return { fetch, calls };
+  return { request, requests };
 };
+
+const isProduct = (value: unknown): value is FixtureProduct =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "id")?.value === "string";
+
+/** Reads a fixture document back as the product it is. */
+export const productSchema: StandardSchema<FixtureProduct> = {
+  "~standard": {
+    version: 1,
+    vendor: "http-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/** The fixture corpus as an index declares it. */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["title", "brand"],
+  filterable: ["brand", "category", "price"],
+  facetable: { brand: "string", category: "string", price: "number" },
+  highlightable: ["title"],
+  sorts: { cheapest: { price: "asc" }, dearest: { price: "desc" } },
+  profiles: { titles: { searchable: ["title"] } },
+});
