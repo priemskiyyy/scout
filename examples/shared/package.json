@@ -1,0 +1,33 @@
+{
+  "name": "example-shared",
+  "private": true,
+  "type": "module",
+  "description": "The Outpost domain and UI recipes the examples share: the catalogue and its index, your API, the in-page engines, the dialect translations, the store's search, the formatting and the Tailwind styles.",
+  "scripts": {
+    "lint:typescript": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@orama/orama": "3.1.18",
+    "@phosphor-icons/core": "2.1.1",
+    "@priemskiyyy/scout": "workspace:*",
+    "@priemskiyyy/scout-algolia": "workspace:*",
+    "@priemskiyyy/scout-elasticsearch": "workspace:*",
+    "@priemskiyyy/scout-fuse": "workspace:*",
+    "@priemskiyyy/scout-http": "workspace:*",
+    "@priemskiyyy/scout-meilisearch": "workspace:*",
+    "@priemskiyyy/scout-minisearch": "workspace:*",
+    "@priemskiyyy/scout-mongodb": "workspace:*",
+    "@priemskiyyy/scout-opensearch": "workspace:*",
+    "@priemskiyyy/scout-orama": "workspace:*",
+    "@priemskiyyy/scout-tanstack-query": "workspace:*",
+    "@priemskiyyy/scout-typesense": "workspace:*",
+    "@tanstack/query-core": "5.103.2",
+    "class-variance-authority": "0.7.1",
+    "fuse.js": "7.5.0",
+    "minisearch": "7.2.0",
+    "zod": "4.1.12"
+  },
+  "devDependencies": {
+    "vite": "8.3.0"
+  }
+}
