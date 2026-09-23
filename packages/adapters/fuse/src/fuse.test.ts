@@ -1,233 +1,287 @@
-import { SearchConfigurationError } from "@priemskiyyy/scout";
-import Fuse from "fuse.js";
-import { expect, test, vi } from "vitest";
+import { Scout } from "@priemskiyyy/scout";
+import type { AdapterSearchRequest } from "@priemskiyyy/scout";
+import { expect, test } from "vitest";
+
 import { fuse } from "src/fuse";
-import { createProductIndex, PRODUCTS, request } from "src/fuse.fixture";
+import { createProductIndex, PRODUCTS, productIndex } from "src/fuse.fixture";
+import type { Product } from "src/fuse.fixture";
 import type { FuseIndex } from "src/types/FuseIndex";
 
-const options = {
-  revision: () => 1,
-  sorts: { relevance: null },
-  profiles: { default: null },
-};
-const context = () => ({ signal: new AbortController().signal });
+const context = { signal: new AbortController().signal };
 
-test("pagination slices the full result set and preserves Fuse metadata", async () => {
-  const engine = createProductIndex();
-  const adapter = fuse({ ...options, index: engine });
-  const result = await adapter.search(
-    request({ page: { current: 2, size: 2 } }),
-    context(),
+const getRequest = (
+  overrides: Partial<AdapterSearchRequest> = {},
+): AdapterSearchRequest => ({
+  index: "products",
+  query: "shoe",
+  searchable: ["title", "tags"],
+  profile: "default",
+  sort: null,
+  filter: null,
+  facets: [],
+  highlights: [],
+  page: { current: 1, size: 10 },
+  provider: null,
+  ...overrides,
+});
+
+// Records what the adapter asks of a real Fuse, so a test can see the query.
+const getRecordingIndex = (engine: FuseIndex<Product>) => {
+  const queries: unknown[] = [];
+
+  const recording: FuseIndex<Product> = {
+    options: engine.options,
+    getIndex: () => engine.getIndex(),
+    search: (query) => {
+      queries.push(query);
+
+      return engine.search(query);
+    },
+  };
+
+  return { recording, queries };
+};
+
+const search = async (
+  overrides: Partial<AdapterSearchRequest> = {},
+  engine: FuseIndex<Product> = createProductIndex(),
+) => {
+  const { recording, queries } = getRecordingIndex(engine);
+
+  const response = await fuse({ index: recording, revision: () => 1 }).search(
+    getRequest(overrides),
+    context,
   );
-  expect(result.hits.map((hit) => hit.native.item.id)).toEqual(["p3", "p4"]);
-  expect(result.total).toEqual({
+
+  return {
+    response,
+    queries,
+    ids: response.hits.map((hit) => hit.native.item.id),
+  };
+};
+
+const getError = async (run: () => unknown) => {
+  try {
+    await run();
+  } catch (error) {
+    return error;
+  }
+
+  throw new Error("The search answered.");
+};
+
+const getScout = () =>
+  new Scout({
+    indexes: { products: productIndex },
+    adapters: {
+      products: fuse({ index: createProductIndex(), revision: () => 1 }),
+    },
+  });
+
+test("creating the adapter asks nothing of the index", () => {
+  const index: FuseIndex<Product> = {
+    get options(): never {
+      throw new Error("The options were read.");
+    },
+    getIndex: () => {
+      throw new Error("The index was read.");
+    },
+    search: () => {
+      throw new Error("The index was searched.");
+    },
+  };
+
+  expect(() =>
+    fuse({
+      index,
+      revision: () => {
+        throw new Error("The revision was read.");
+      },
+    }),
+  ).not.toThrow();
+});
+
+test("a search asks Fuse once and counts every match exactly", async () => {
+  const { response, queries, ids } = await search();
+
+  expect(queries).toEqual(["shoe"]);
+  expect(ids).toEqual(["p1", "p2", "p3", "p4", "p5"]);
+  expect(response.total).toEqual({
     value: 5,
     accuracy: "exact",
     scope: "matches",
   });
-  expect(result.page).toEqual({
-    kind: "page",
-    current: 2,
-    size: 2,
-    previous: 1,
-    next: 3,
+});
+
+test("an empty query browses every document in collection order", async () => {
+  const { response, ids } = await search({ query: "" });
+
+  expect(ids).toEqual(PRODUCTS.map((product) => product.id));
+  expect(response.total).toMatchObject({ value: PRODUCTS.length });
+});
+
+test("a profile over fewer keys finds only what those keys hold", async () => {
+  const everything = await search({ query: "formal" });
+
+  const titles = await search({
+    query: "formal",
+    searchable: ["title"],
+    profile: "titles",
   });
-  expect(result.native).toEqual(engine.search("shoe"));
-  expect(result.hits[0]?.native.score).toEqual(expect.any(Number));
-  expect(adapter.native).toBe(engine);
-  expect(result.took).toBeNull();
+
+  expect(everything.ids).toEqual(["p3"]);
+  expect(titles.ids).toEqual([]);
 });
 
-test("portable filters apply before pagination, including arrays and composition", async () => {
-  const adapter = fuse({ ...options, index: createProductIndex() });
-  const result = await adapter.search(
-    request({
-      page: { current: 2, size: 1 },
-      filter: {
-        type: "and",
-        expressions: [
-          {
-            type: "comparison",
-            field: "tags",
-            operator: "in",
-            value: ["sale"],
-          },
-          {
-            type: "not",
-            expression: {
-              type: "comparison",
-              field: "price",
-              operator: "gte",
-              value: 90,
-            },
-          },
-        ],
-      },
-    }),
-    context(),
-  );
-  expect(result.hits.map((hit) => hit.native.item.id)).toEqual(["p5"]);
-  expect(result.total).toMatchObject({ value: 2 });
-  expect(result.page.next).toBeNull();
-  expect(result.native).toHaveLength(5);
-});
-
-test("a contradiction does not call Fuse", async () => {
-  const engine = createProductIndex();
-  const search = vi.spyOn(engine, "search");
-  const result = await fuse({ ...options, index: engine }).search(
-    request({ filter: { type: "constant", value: false } }),
-    context(),
-  );
-  expect(search).not.toHaveBeenCalled();
-  expect(result.total).toMatchObject({ value: 0 });
-  expect(result.native).toBeNull();
-});
-
-test("native empty-query semantics are retained", async () => {
-  const result = await fuse({ ...options, index: createProductIndex() }).search(
-    request({ query: "" }),
-    context(),
-  );
-  expect(result.hits.map((hit) => hit.native.item)).toEqual(PRODUCTS);
-  expect(result.total).toMatchObject({ value: PRODUCTS.length });
-});
-
-test("highlights preserve non-ASCII text and inclusive match ranges", async () => {
-  const engine = new Fuse([{ title: "Café ☕ 京都" }], {
-    keys: ["title"],
-    includeMatches: true,
-    threshold: 0,
-    ignoreLocation: true,
-  });
-  const result = await fuse({ ...options, index: engine }).search(
-    request({ query: "京都", highlights: ["title"] }),
-    context(),
-  );
-  expect(result.hits[0]?.highlights.title).toEqual([
-    {
-      path: ["title"],
-      truncated: false,
-      parts: [
-        { text: "Café ☕ ", matched: false },
-        { text: "京都", matched: true },
-      ],
-    },
-  ]);
-});
-
-test("array highlights keep element paths and untouched values", async () => {
-  const engine = new Fuse([{ tags: ["casual", "京都"] }], {
-    keys: ["tags"],
-    includeMatches: true,
-    threshold: 0,
-  });
-  const result = await fuse({ ...options, index: engine }).search(
-    request({ query: "京都", highlights: ["tags"] }),
-    context(),
-  );
-  expect(result.hits[0]?.highlights.tags).toEqual([
-    {
-      path: ["tags", 0],
-      truncated: false,
-      parts: [{ text: "casual", matched: false }],
-    },
-    {
-      path: ["tags", 1],
-      truncated: false,
-      parts: [{ text: "京都", matched: true }],
-    },
-  ]);
-});
-
-test.each(
+test.each([
   [
-    [[-1, 2]],
-    [[0, 50]],
-    [[2, 1]],
-    [[0.5, 2]],
-    [
-      [0, 2],
-      [1, 3],
-    ],
-    [[0, 0]],
-  ].map((indices) => ({ indices })),
-)(
-  "malformed or split-surrogate ranges degrade to the original text: $indices",
-  async ({ indices }) => {
-    const engine: FuseIndex<{ title: string }> = {
-      options: { includeMatches: true },
-      search: () => [
-        {
-          item: { title: "😀 shoe" },
-          refIndex: 0,
-          matches: [
-            {
-              key: "title",
-              value: "😀 shoe",
-              indices: indices.map((range) => [range[0] ?? -1, range[1] ?? -1]),
-            },
-          ],
-        },
-      ],
-    };
-    const result = await fuse({ ...options, index: engine }).search(
-      request({ highlights: ["title"] }),
-      context(),
+    "facets",
+    { facets: ["category"] },
+    createProductIndex(),
+    "unsupported-feature",
+  ],
+  [
+    "highlights on a Fuse built without includeMatches",
+    { highlights: ["title"] },
+    createProductIndex({ includeMatches: false }),
+    "unsupported-feature",
+  ],
+  [
+    "a profile searching a field Fuse does not index",
+    { searchable: ["title", "category"], profile: "wide" },
+    createProductIndex(),
+    "configuration",
+  ],
+  [
+    "fewer keys than Fuse indexes with extended search on",
+    { searchable: ["title"], profile: "titles" },
+    createProductIndex({ useExtendedSearch: true }),
+    "unsupported-feature",
+  ],
+] satisfies [
+  string,
+  Partial<AdapterSearchRequest>,
+  FuseIndex<Product>,
+  string,
+][])(
+  "%s are refused before anything is searched",
+  async (_what, overrides, engine, code) => {
+    const { recording, queries } = getRecordingIndex(engine);
+    const adapter = fuse({ index: recording, revision: () => 1 });
+
+    const error = await getError(() =>
+      adapter.search(getRequest(overrides), context),
     );
-    expect(result.hits[0]?.highlights.title?.[0]?.parts).toEqual([
-      { text: "😀 shoe", matched: false },
-    ]);
+
+    expect(error).toMatchObject({ code });
+    expect(queries).toEqual([]);
   },
 );
 
-test("stale match text cannot replace the actual document text", async () => {
-  const engine: FuseIndex<{ title: string }> = {
-    options: { includeMatches: true },
-    search: () => [
-      {
-        item: { title: "shoe" },
-        refIndex: 0,
-        matches: [{ key: "title", value: "other", indices: [[0, 3]] }],
-      },
-    ],
-  };
-  const result = await fuse({ ...options, index: engine }).search(
-    request({ highlights: ["title"] }),
-    context(),
-  );
-  expect(result.hits[0]?.highlights.title?.[0]?.parts).toEqual([
-    { text: "shoe", matched: false },
-  ]);
+test("filters apply to every match before a page is cut, so the total stays exact", async () => {
+  const { response, ids } = await search({
+    page: { current: 2, size: 1 },
+    filter: {
+      type: "and",
+      expressions: [
+        { type: "comparison", field: "tags", operator: "in", value: ["sale"] },
+        {
+          type: "not",
+          expression: {
+            type: "comparison",
+            field: "price",
+            operator: "gte",
+            value: 90,
+          },
+        },
+      ],
+    },
+  });
+
+  expect(ids).toEqual(["p5"]);
+  expect(response.total).toMatchObject({ value: 2 });
+  expect(response.native).toHaveLength(5);
 });
 
-test("capabilities describe the injected configuration", () => {
-  const adapter = fuse({ ...options, index: createProductIndex(false) });
-  expect(adapter.capabilities.highlights).toBe("none");
-  expect(adapter.capabilities.facets.resultScoped).toBe(false);
-  expect(adapter.capabilities.cancellation).toBe("logical");
+test("a sort orders every match before a page is cut", async () => {
+  const { response, ids } = await search({
+    sort: { name: "priceAsc", by: [{ field: "price", direction: "asc" }] },
+    page: { current: 1, size: 2 },
+  });
+
+  expect(ids).toEqual(["p4", "p5"]);
+  expect(response.total).toMatchObject({ value: 5 });
 });
 
-test("unknown sort and profile names fail without searching", async () => {
+test("relevance keeps Fuse's own order", async () => {
+  const engine = createProductIndex({ shouldSort: true });
+  const { ids } = await search({}, engine);
+
+  expect(ids).toEqual(engine.search("shoe").map((hit) => hit.item.id));
+});
+
+test("the native answers are Fuse's own", async () => {
   const engine = createProductIndex();
-  const search = vi.spyOn(engine, "search");
-  const adapter = fuse({ ...options, index: engine });
-  await expect(
-    adapter.search(request({ sort: "missing" }), context()),
-  ).rejects.toThrow(SearchConfigurationError);
-  await expect(
-    adapter.search(request({ profile: "missing" }), context()),
-  ).rejects.toThrow(SearchConfigurationError);
-  expect(search).not.toHaveBeenCalled();
+  const adapter = fuse({ index: engine, revision: () => 1 });
+  const response = await adapter.search(getRequest(), context);
+
+  expect(adapter.native).toBe(engine);
+  expect(response.native).toEqual(engine.search("shoe"));
+  expect(response.hits[0]?.native.score).toEqual(expect.any(Number));
+  expect(response.took).toBeNull();
 });
 
-test("corpus revisions change identity and disposal leaves the borrowed engine usable", () => {
+test("the fingerprint follows the corpus revision", () => {
   let revision = 1;
-  const engine = createProductIndex();
-  const adapter = fuse({ ...options, index: engine, revision: () => revision });
-  const before = adapter.fingerprint();
+
+  const adapter = fuse({
+    index: createProductIndex(),
+    revision: () => revision,
+  });
+
+  expect(adapter.fingerprint()).toBe("fuse:1");
   revision += 1;
-  expect(adapter.fingerprint()).not.toBe(before);
-  adapter.dispose();
+  expect(adapter.fingerprint()).toBe("fuse:2");
+});
+
+test("through Scout, a search is filtered, sorted, paged and highlighted", async () => {
+  const result = await getScout()
+    .index("products")
+    .search("shoe")
+    .where((product) => product.category.eq("footwear"))
+    .sort("priceAsc")
+    .highlight("title")
+    .page({ size: 2 })
+    .execute();
+
+  expect(result.hits.map((hit) => hit.id)).toEqual(["p1", "p2"]);
+  expect(result.total).toEqual({
+    value: 3,
+    accuracy: "exact",
+    scope: "matches",
+  });
+  expect(result.page.next).toBe(2);
+  expect(result.hits[0]?.highlights.title[0]?.parts).toContainEqual({
+    text: "shoe",
+    matched: true,
+  });
+});
+
+test("through Scout, a refusal reaches the caller unchanged", async () => {
+  await expect(
+    getScout().index("products").search("shoe").facets("category").execute(),
+  ).rejects.toMatchObject({ code: "unsupported-feature" });
+});
+
+test("disposing Scout leaves the borrowed Fuse usable", () => {
+  const engine = createProductIndex();
+
+  const scout = new Scout({
+    indexes: { products: productIndex },
+    adapters: { products: fuse({ index: engine, revision: () => 1 }) },
+  });
+
+  scout.dispose();
+
   expect(engine.search("shoe")).toHaveLength(PRODUCTS.length);
 });

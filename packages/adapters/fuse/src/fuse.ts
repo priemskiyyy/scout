@@ -1,101 +1,63 @@
-import {
-  createSearchAdapter,
-  emptySearchResponse,
-  matchesFilter,
-  resolveConfigured,
-} from "@priemskiyyy/scout";
-import type {
-  AdapterSearchRequest,
-  AdapterSearchResponse,
-} from "@priemskiyyy/scout";
+import { ScoutError } from "@priemskiyyy/scout";
+import { matchesFilter } from "@priemskiyyy/scout/adapter";
+
 import type { FuseAdapterOptions } from "src/types/FuseAdapterOptions";
-import type { FuseHit } from "src/types/FuseHit";
-import { highlightsFor } from "src/utils/highlightsFor";
+import type { FuseSearchAdapter } from "src/types/FuseSearchAdapter";
+import { getHitsFromMatches } from "src/utils/getHitsFromMatches";
+import { getQueryFromRequest } from "src/utils/getQueryFromRequest";
+import { getSortedHits } from "src/utils/getSortedHits";
 
 /**
- * Adapts an application-owned Fuse instance. Matching and ordering are configured
- * on that instance; named sorts and profiles alias its configuration.
+ * Searches a Fuse instance the application owns. Fuse returns every match, so
+ * the adapter filters, sorts and pages the whole set in process, and the total
+ * is exact.
  *
  * @example
  * ```ts
  * const adapter = fuse({
- *   index: new Fuse(products, { keys: ["title"], includeMatches: true }),
+ *   index: new Fuse(products, { keys: ["name", "tags"], includeMatches: true }),
  *   revision: () => catalogueVersion,
- *   sorts: { relevance: null },
- *   profiles: { default: null },
  * });
  * ```
  */
-export const fuse = <TDocument, TSort extends string, TProfile extends string>(
-  options: FuseAdapterOptions<TDocument, TSort, TProfile>,
-) =>
-  createSearchAdapter({
-    name: "fuse",
-    native: options.index,
-    sorts: options.sorts,
-    profiles: options.profiles,
-    capabilities: {
-      filters: {
-        eq: true,
-        neq: true,
-        in: true,
-        notIn: true,
-        comparison: true,
-        between: true,
-        booleanComposition: true,
-      },
-      pagination: { maxPageSize: null },
-      facets: { resultScoped: false },
-      highlights: options.index.options.includeMatches ? "parts" : "none",
-      cancellation: "logical",
-    },
-    fingerprint: () => `fuse:${String(options.revision())}`,
-    search: async (
-      request: AdapterSearchRequest<never>,
-    ): Promise<
-      AdapterSearchResponse<
-        FuseHit<TDocument>,
-        readonly FuseHit<TDocument>[] | null
-      >
-    > => {
-      resolveConfigured(options.sorts, request.sort, {
-        adapter: "fuse",
-        kind: "sorts",
+export const fuse = <TDocument>({
+  index,
+  revision,
+}: FuseAdapterOptions<TDocument>): FuseSearchAdapter<TDocument> => ({
+  name: "fuse",
+  native: index,
+  fingerprint: () => `fuse:${String(revision())}`,
+  search: (request) => {
+    if (request.facets.length > 0) {
+      throw new ScoutError({
+        code: "unsupported-feature",
+        message: "Fuse has no facet index, so it cannot count facet values.",
       });
-      resolveConfigured(options.profiles, request.profile, {
-        adapter: "fuse",
-        kind: "profiles",
+    }
+
+    if (request.highlights.length > 0 && !index.options.includeMatches) {
+      throw new ScoutError({
+        code: "unsupported-feature",
+        message:
+          "Fuse reports match ranges only when it is built with includeMatches, so it cannot highlight.",
       });
-      if (request.filter.type === "constant" && !request.filter.value) {
-        return emptySearchResponse(request);
-      }
+    }
 
-      const native = options.index.search(request.query);
-      // Fuse returns every match. Filtering before slicing preserves exact totals
-      // and keeps matching documents on later pages reachable.
-      const results = native.filter((hit) =>
-        matchesFilter(request.filter, hit.item),
-      );
-      const start = (request.page.current - 1) * request.page.size;
-      const end = start + request.page.size;
+    const native = index.search(getQueryFromRequest(index, request));
 
-      return {
-        hits: results.slice(start, end).map((hit) => ({
-          document: hit.item,
-          highlights: highlightsFor(hit, request.highlights),
-          native: hit,
-        })),
-        page: {
-          kind: "page",
-          current: request.page.current,
-          size: request.page.size,
-          next: end < results.length ? request.page.current + 1 : null,
-          previous: request.page.current > 1 ? request.page.current - 1 : null,
-        },
-        total: { value: results.length, accuracy: "exact", scope: "matches" },
-        facets: {},
-        took: null,
-        native,
-      };
-    },
-  });
+    // Filtered and sorted over every match before a page is cut, so the total
+    // is exact and every matching document stays reachable.
+    const matches = getSortedHits(
+      native.filter((hit) => matchesFilter(request.filter, hit.item)),
+      request.sort,
+    );
+
+    return {
+      hits: getHitsFromMatches(matches, request.page, request.highlights),
+      total: { value: matches.length, accuracy: "exact", scope: "matches" },
+      facets: {},
+      took: null,
+      native,
+    };
+  },
+});

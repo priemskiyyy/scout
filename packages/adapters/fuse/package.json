@@ -1,7 +1,7 @@
 {
   "name": "@priemskiyyy/scout-fuse",
   "version": "0.1.0",
-  "description": "Fuse.js adapter for Scout with exact totals, portable filtering and safe match highlights.",
+  "description": "Fuse.js adapter for Scout with exact totals, portable filters and sorts, and safe match highlights.",
   "type": "module",
   "license": "MIT",
   "repository": {

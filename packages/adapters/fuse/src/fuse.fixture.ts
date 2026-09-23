@@ -1,5 +1,7 @@
+import { index } from "@priemskiyyy/scout";
+import type { StandardSchema } from "@priemskiyyy/scout";
 import Fuse from "fuse.js";
-import type { AdapterSearchRequest } from "@priemskiyyy/scout";
+import type { IFuseOptions } from "fuse.js";
 
 export const PRODUCTS = [
   {
@@ -41,26 +43,48 @@ export const PRODUCTS = [
 
 export type Product = (typeof PRODUCTS)[number];
 
-export const createProductIndex = (includeMatches = true) =>
+const isProduct = (value: unknown): value is Product =>
+  typeof value === "object" &&
+  value !== null &&
+  typeof Object.getOwnPropertyDescriptor(value, "id")?.value === "string";
+
+/** Reads a corpus document back as the product it is. */
+export const productSchema: StandardSchema<Product> = {
+  "~standard": {
+    version: 1,
+    vendor: "fuse-fixture",
+    validate: (value) => {
+      if (isProduct(value)) {
+        return { value };
+      }
+
+      return { issues: [{ message: "Not a product." }] };
+    },
+  },
+};
+
+/**
+ * The corpus as an index declares it. Fuse cannot count `category`, so the
+ * conformance suite sees that facet refused.
+ */
+export const productIndex = index({
+  schema: productSchema,
+  id: (product) => product.id,
+  searchable: ["title", "tags"],
+  filterable: ["category", "price", "tags"],
+  facetable: { category: "string" },
+  highlightable: ["title"],
+  sorts: { priceAsc: { price: "asc" } },
+  profiles: { titles: { searchable: ["title"] } },
+});
+
+/** A real Fuse over the corpus, keyed by the index's searchable fields. */
+export const createProductIndex = (options: IFuseOptions<Product> = {}) =>
   new Fuse(PRODUCTS, {
     keys: ["title", "tags"],
     threshold: 0.3,
     shouldSort: false,
-    includeMatches,
+    includeMatches: true,
     includeScore: true,
+    ...options,
   });
-
-export const request = (
-  overrides: Partial<AdapterSearchRequest<never>> = {},
-): AdapterSearchRequest<never> => ({
-  index: "products",
-  query: "shoe",
-  profile: "default",
-  sort: "relevance",
-  filter: { type: "constant", value: true },
-  facets: [],
-  highlights: [],
-  page: { current: 1, size: 10 },
-  provider: null,
-  ...overrides,
-});
