@@ -1,8 +1,15 @@
+import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vite";
 
 export default defineConfig({
-  resolve: { alias: { src: fileURLToPath(new URL("./src", import.meta.url)) } },
+  plugins: [tailwindcss()],
+  resolve: {
+    alias: {
+      src: fileURLToPath(new URL("./src", import.meta.url)),
+      "examples/shared": fileURLToPath(new URL("../shared", import.meta.url)),
+    },
+  },
   build: {
     rollupOptions: {
       // TanStack Query marks its hooks "use client" for React Server
@@ -13,6 +20,7 @@ export default defineConfig({
         if (warning.code === "MODULE_LEVEL_DIRECTIVE") {
           return;
         }
+
         warn(warning);
       },
     },
