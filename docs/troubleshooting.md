@@ -96,7 +96,8 @@ of fifty hits would otherwise await fifty times.
 
 ## `"aborted"`
 
-**What you see.** A rejected search whose `cause` is the abort reason.
+**What you see.** A rejected search whose `cause` is the abort reason, or
+`undefined` on React Native, whose `AbortSignal` has no `reason`.
 
 **Why.** The signal passed to `execute({ signal })` fired, which with TanStack
 Query happens on unmount and on a superseded query. The promise settles at once

@@ -1,4 +1,4 @@
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 
 import { product } from "src/utils/internal/testSchema.fixture";
 import {
@@ -251,4 +251,47 @@ test("took falls back to a monotonic measurement of Scout's own", async () => {
 
   expect(result.took.source).toBe("scout");
   expect(result.took.milliseconds).toBeGreaterThanOrEqual(0);
+});
+
+test("on React Native, whose AbortSignal has no reason, searches answer, abort and dispose", async () => {
+  class ReactNativeAbortSignal extends EventTarget {
+    aborted = false;
+  }
+
+  class ReactNativeAbortController {
+    signal = new ReactNativeAbortSignal();
+
+    abort() {
+      this.signal.aborted = true;
+      this.signal.dispatchEvent(new Event("abort"));
+    }
+  }
+
+  vi.stubGlobal("AbortController", ReactNativeAbortController);
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const answered = createTestScout({
+    response: getAnswer([product({ id: "shoe" })]),
+  });
+
+  await expect(
+    answered.products.search("shoe").execute(),
+  ).resolves.toMatchObject({ hits: [{ document: { id: "shoe" } }] });
+
+  const held = createTestScout({ hold: true });
+  const controller = new AbortController();
+
+  const aborted = held.products
+    .search("shoe")
+    .execute({ signal: controller.signal });
+
+  controller.abort();
+  await expect(aborted).rejects.toMatchObject({ code: "aborted" });
+
+  const disposed = held.products.search("boot").execute();
+
+  held.scout.dispose();
+  await expect(disposed).rejects.toMatchObject({ code: "disposed" });
 });

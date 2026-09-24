@@ -221,6 +221,7 @@ what it says is never sent and never billed.
 
 The `signal` is optional. When it aborts, the promise rejects at once with a
 `ScoutError` whose code is `"aborted"` and whose `cause` is the signal's
-reason, and an answer that arrives later is refused. The adapter gets the
+reason, and an answer that arrives later is refused. React Native's
+`AbortSignal` has no `reason`, so there the `cause` is `undefined`. The adapter gets the
 signal too, so an engine whose SDK can cancel a request cancels it; one that
 cannot finishes the work while Scout has already stopped waiting.

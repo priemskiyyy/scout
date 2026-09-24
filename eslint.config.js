@@ -26,6 +26,10 @@ const bannedSyntax = toRestrictions([
   ["AssignmentExpression[operator='||=']", "Use explicit assignment."],
   ["AssignmentExpression[operator='&&=']", "Use explicit assignment."],
   ["ExportAllDeclaration", "List public exports explicitly."],
+  [
+    "MemberExpression[property.name='throwIfAborted']",
+    "React Native's AbortSignal has no throwIfAborted(): check signal.aborted.",
+  ],
 ]);
 
 const relativeImports = toRestrictions([
