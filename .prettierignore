@@ -6,5 +6,3 @@ docs/.vitepress/dist
 docs/.vitepress/cache
 # Prettier rewrites the TypeScript code fences in section 6 of the design, which is
 # the binding authority later milestones copy type bodies from.
-tasks/design.md
-tasks/spikes
