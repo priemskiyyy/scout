@@ -5,7 +5,7 @@ Search your own backend with [Scout](https://priemskiyyy.github.io/scout/), thro
 ## Installation
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-http
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-http@next
 ```
 
 ## Create a Scout

@@ -57,7 +57,7 @@ the engine may still be computing and, on a hosted engine, still billing.
 ## Typesense
 
 ```sh
-pnpm add @priemskiyyy/scout-typesense typesense
+pnpm add @priemskiyyy/scout-typesense@next typesense
 ```
 
 ```ts
@@ -117,7 +117,7 @@ the
 ## Meilisearch
 
 ```sh
-pnpm add @priemskiyyy/scout-meilisearch meilisearch
+pnpm add @priemskiyyy/scout-meilisearch@next meilisearch
 ```
 
 ```ts
@@ -147,7 +147,7 @@ says whether it cut a distribution short.
 ## MongoDB Search
 
 ```sh
-pnpm add @priemskiyyy/scout-mongodb mongodb
+pnpm add @priemskiyyy/scout-mongodb@next mongodb
 ```
 
 ```ts
@@ -179,7 +179,7 @@ exhaustive, and highlights arrive as passages already split into parts.
 ## Elasticsearch
 
 ```sh
-pnpm add @priemskiyyy/scout-elasticsearch @elastic/elasticsearch
+pnpm add @priemskiyyy/scout-elasticsearch@next @elastic/elasticsearch
 ```
 
 ```ts
@@ -211,7 +211,7 @@ its facets are not exhaustive. Paging ends at the index's `max_result_window`,
 ## OpenSearch
 
 ```sh
-pnpm add @priemskiyyy/scout-opensearch @opensearch-project/opensearch
+pnpm add @priemskiyyy/scout-opensearch@next @opensearch-project/opensearch
 ```
 
 ```ts
@@ -231,7 +231,7 @@ headers and metadata.
 ## Orama
 
 ```sh
-pnpm add @priemskiyyy/scout-orama @orama/orama
+pnpm add @priemskiyyy/scout-orama@next @orama/orama
 ```
 
 ```ts
@@ -263,7 +263,7 @@ keys and devtools, so it must not be a credential.
 ## MiniSearch
 
 ```sh
-pnpm add @priemskiyyy/scout-minisearch minisearch
+pnpm add @priemskiyyy/scout-minisearch@next minisearch
 ```
 
 ```ts
@@ -287,7 +287,7 @@ so every field a filter or a sort reads must be stored, or produced by
 ## Fuse.js
 
 ```sh
-pnpm add @priemskiyyy/scout-fuse fuse.js
+pnpm add @priemskiyyy/scout-fuse@next fuse.js
 ```
 
 ```ts
@@ -309,7 +309,7 @@ the instance you pass. Facets are refused.
 ## HTTP, your own endpoint
 
 ```sh
-pnpm add @priemskiyyy/scout-http
+pnpm add @priemskiyyy/scout-http@next
 ```
 
 ```ts

@@ -6,7 +6,7 @@ search request onto one Meilisearch index and maps the answer back, and it does
 nothing else. Requires `meilisearch` 0.50 or newer.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-meilisearch meilisearch
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-meilisearch@next meilisearch
 ```
 
 `meilisearch` is a peer dependency and the client is yours. This package

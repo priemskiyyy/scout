@@ -7,7 +7,7 @@ TanStack Query options built from a Scout search. `queryOptions` and
 wrapped or re-exported here, so your version of TanStack Query stays yours.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-tanstack-query @tanstack/react-query
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-tanstack-query@next @tanstack/react-query
 ```
 
 ## One page

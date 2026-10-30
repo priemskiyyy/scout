@@ -4,6 +4,12 @@ description: "Fuse.js fuzzy search with portable filters and sorts, exact pagina
 
 # Fuse.js
 
+## Installation
+
+```sh
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-fuse@next fuse.js
+```
+
 | Scout       | Fuse.js mapping                                                        |
 | ----------- | ---------------------------------------------------------------------- |
 | Query       | `index.search(query)` over the injected instance                       |

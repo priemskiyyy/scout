@@ -11,7 +11,7 @@ Pair it with an adapter (`@priemskiyyy/scout-typesense`, `-algolia`,
 caching, `@priemskiyyy/scout-tanstack-query`.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next
 ```
 
 ```ts

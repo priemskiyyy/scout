@@ -17,7 +17,7 @@ identity.
 [GitHub](https://github.com/priemskiyyy/scout)
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense typesense zod
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next typesense zod
 ```
 
 ## One search, typed end to end

@@ -8,7 +8,7 @@ It translates the portable keyword subset and nothing else. Vector, hybrid and
 embedding search are not reached from here.
 
 ```sh
-pnpm add @priemskiyyy/scout-orama @priemskiyyy/scout @orama/orama
+pnpm add @priemskiyyy/scout-orama@next @priemskiyyy/scout@next @orama/orama
 ```
 
 The database and Orama's `search` are injected, so this package imports no

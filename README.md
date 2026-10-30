@@ -12,10 +12,21 @@ how certain a result count actually is.
 
 TanStack Query keeps the fetching and caching it is already good at.
 
+## npm preview
+
+The initial npm preview uses the `next` dist-tag. Add `@next` when installing
+Scout packages. This release includes the core, TanStack Query integration,
+HTTP, Typesense, Meilisearch, MongoDB Search, Elasticsearch, OpenSearch,
+Orama, MiniSearch and Fuse.js adapters.
+
+The Algolia adapter is available as source while hosted-provider verification
+continues. See [verification](docs/verification.md) for the tested environments
+and remaining limits. The API may change during the preview.
+
 ## Search something
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense zod
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next zod
 ```
 
 ```ts
@@ -100,7 +111,7 @@ without it.
 ## With TanStack Query
 
 ```sh
-pnpm add @priemskiyyy/scout-tanstack-query
+pnpm add @priemskiyyy/scout-tanstack-query@next
 ```
 
 ```ts
