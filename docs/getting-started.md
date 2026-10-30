@@ -9,7 +9,7 @@ puts it behind TanStack Query. Every other adapter is wired the same way: the
 index declaration does not change, only the adapter bound to it does.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense typesense zod
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next typesense zod
 ```
 
 ## Declare what a document is
@@ -179,7 +179,7 @@ TanStack Query owns caching, staleness, retries and infinite page storage.
 Scout sets none of those defaults.
 
 ```sh
-pnpm add @priemskiyyy/scout-tanstack-query @tanstack/react-query
+pnpm add @priemskiyyy/scout-tanstack-query@next @tanstack/react-query
 ```
 
 ```ts

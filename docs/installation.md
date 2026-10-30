@@ -4,11 +4,15 @@ description: "Install Scout, an adapter for your engine and the optional TanStac
 
 # Installation
 
+The initial npm preview uses the `next` dist-tag. The
+[preview package list](https://github.com/priemskiyyy/scout#npm-preview) names the
+packages included in this release. The Algolia adapter remains in development.
+
 Scout is three installs at most: the core, one adapter for the engine you
 search, and the TanStack Query package when you want caching handled for you.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense typesense
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next typesense
 ```
 
 The core carries the index declaration, the search builder, the filter AST and

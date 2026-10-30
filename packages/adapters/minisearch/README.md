@@ -5,7 +5,7 @@ The [MiniSearch](https://lucaong.github.io/minisearch/) adapter for
 instance your application owns, in process, and does nothing else.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-minisearch minisearch
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-minisearch@next minisearch
 ```
 
 `minisearch` 7 is a peer dependency and the instance is yours. This package

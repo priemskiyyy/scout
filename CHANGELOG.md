@@ -1,6 +1,6 @@
 # Changelog
 
-## @priemskiyyy/scout 0.1.0 - Unreleased
+## @priemskiyyy/scout 0.1.0 - 2026-10-30
 
 - First release. One `Scout` per application over named `indexes`, each served by one of its `adapters`, and reached with `scout.index(name)`. An index without an adapter, an adapter without an index, and an adapter that serves sorts through its own configuration but misses one are refused at compile time and when the Scout is built.
 - `index()` declares the portable contract and names no engine: the Standard Schema for its documents, the fields a search reads, filters, facets and highlights, facet value types, named sorts as fields and directions, and named profiles as the fields they search. "relevance" and "default" are built in.
@@ -12,7 +12,7 @@
 - Highlights are safe text parts rather than trusted HTML, and malformed highlight metadata degrades to plain text.
 - An adapter is a plain object. It lists the provider options it writes itself as `reservedOptions`, and the core refuses a search that passes one. `@priemskiyyy/scout/adapter` has the helpers adapters build on, `@priemskiyyy/scout/mock` a controllable adapter for tests, and `@priemskiyyy/scout/testing` the conformance suite every adapter runs through a real `Scout`.
 
-## @priemskiyyy/scout-tanstack-query 0.1.0 - Unreleased
+## @priemskiyyy/scout-tanstack-query 0.1.0 - 2026-10-30
 
 - First release. `queryOptions` and `infiniteQueryOptions` turn one search into plain TanStack Query options, so they drop into `useQuery`, `useInfiniteQuery`, `prefetchQuery` or `ensureQueryData` and can be spread over.
 - The query key is the search's canonical identity, and the `signal` TanStack supplies reaches `execute`, so cancellation reaches the engine rather than only the cache.
@@ -22,7 +22,7 @@
 - No caching, staleness or retry default is set here. Those belong to the application.
 - Requires `@priemskiyyy/scout` 0.1.
 
-## @priemskiyyy/scout-typesense 0.1.0 - Unreleased
+## @priemskiyyy/scout-typesense 0.1.0 - 2026-10-30
 
 - First release. One Typesense collection behind the portable contract: an exact `filter_by` with its own escaping, `sort_by` from the index's sorts, `*` for a browse, one based pages, and per search highlight markers parsed into safe parts.
 - A total is `"estimated"` when Typesense reports `search_cutoff`, and exact otherwise. A sampled facet is not exhaustive.
@@ -39,7 +39,7 @@
 - The client is injected, so this package imports no SDK at runtime. The Algolia client takes no signal, so an aborted search settles at once but may still run.
 - Requires `@priemskiyyy/scout` 0.1 and `algoliasearch` 5.
 
-## @priemskiyyy/scout-meilisearch 0.1.0 - Unreleased
+## @priemskiyyy/scout-meilisearch 0.1.0 - 2026-10-30
 
 - First release. One Meilisearch index behind the portable contract, with `attributesToSearchOn` from the profile, `sort` from the index's sorts, one based pages in either page or offset mode, and safe highlight parts from per search markers.
 - A total that reaches the index's `maxTotalHits` is a lower bound of what paging can reach, and offset mode's estimate is reported as estimated.
@@ -47,7 +47,7 @@
 - The index client is injected, so this package imports no SDK at runtime, and the signal reaches it.
 - Requires `@priemskiyyy/scout` 0.1 and `meilisearch` 0.50 or newer.
 
-## @priemskiyyy/scout-mongodb 0.1.0 - Unreleased
+## @priemskiyyy/scout-mongodb 0.1.0 - 2026-10-30
 
 - First release. One collection behind the portable contract through its MongoDB Search index. Each search is one aggregation pipeline: `$search` first, the query as `text` over the profile's fields, the filter as `compound` clauses that do not score, sorts in the stage's `sort`, and `$skip` and `$limit` pages.
 - Totals, facets and highlights arrive on every row. A `lowerBound` count above 1000 is reported as a lower bound, and `exactTotals` asks for an exact count. Facets are not known to be exhaustive, and highlights arrive as parts, so there are no markers to forge.
@@ -55,7 +55,7 @@
 - The collection is injected, so the package imports no driver at runtime, and the signal reaches `aggregate`.
 - Requires `@priemskiyyy/scout` 0.1 and `mongodb` 7.
 
-## @priemskiyyy/scout-elasticsearch 0.1.0 - Unreleased
+## @priemskiyyy/scout-elasticsearch 0.1.0 - 2026-10-30
 
 - First release. One Elasticsearch index behind the portable contract: the filter as a JSON `bool` query, sorts, facets as terms aggregations, per search highlight markers parsed into safe parts, and pages that end at `max_result_window`, reported as `retrievable`.
 - `keywords` names the exact field beside a text field, so equality, facets and sorts never compare analysed tokens.
@@ -64,7 +64,7 @@
 - The client is injected, so this package imports no SDK at runtime, and the signal reaches it.
 - Requires `@priemskiyyy/scout` 0.1 and `@elastic/elasticsearch` 9.
 
-## @priemskiyyy/scout-opensearch 0.1.0 - Unreleased
+## @priemskiyyy/scout-opensearch 0.1.0 - 2026-10-30
 
 - First release. The same translation over one OpenSearch index. The body goes under `body`, and `result.native` is the answer body without the transport's headers and meta.
 - The client takes no signal, so an abort calls `abort()` on the request it returned and the search stops on the wire.
@@ -72,7 +72,7 @@
 - The client is injected, so this package imports no SDK at runtime.
 - Requires `@priemskiyyy/scout` 0.1 and `@opensearch-project/opensearch` 3.
 
-## @priemskiyyy/scout-orama 0.1.0 - Unreleased
+## @priemskiyyy/scout-orama 0.1.0 - 2026-10-30
 
 - First release. Answers a search from an in process Orama database, with no network round trip, in a browser, in React Native or on a server.
 - Exact totals, real pagination, sorts by one field, and facets for `enum`, `boolean` and `string` properties with Orama's own truncation reported as `exhaustive`.
@@ -80,14 +80,14 @@
 - The application owns a corpus `revision` that joins the query identity, since nothing watches a local database.
 - Requires `@priemskiyyy/scout` 0.1 and `@orama/orama` 3.
 
-## @priemskiyyy/scout-http 0.1.0 - Unreleased
+## @priemskiyyy/scout-http 0.1.0 - 2026-10-30
 
 - First release. Search your own backend through your own client: `http({ fingerprint, request })`. `request({ search, signal })` sends the portable search, whose `JSON.stringify` is its wire form, with the address, authentication, headers and retries your client already owns, and resolves with the backend's JSON body.
 - `request` resolves with the answer typed as a `ScoutWireResponse`, which your client owns the way it owns the address, and validates first if its backend is untrusted. A `{ "refusal": { "message" } }` answer reaches the caller as `unsupported-feature`, and anything that fails otherwise is a `provider` error.
 - A backend can say how far paging reaches with `retrievable`.
 - No SDK and no runtime dependency.
 
-## @priemskiyyy/scout-minisearch 0.1.0 - Unreleased
+## @priemskiyyy/scout-minisearch 0.1.0 - 2026-10-30
 
 - First release. An in process MiniSearch index behind the portable contract, with exact totals over every match.
 - Filtering is real: the portable filter becomes MiniSearch's own predicate, which runs over every match, and sorts run over the whole match set before a page is cut.
@@ -95,7 +95,7 @@
 - A `resolve` hook builds the document when `storeFields` does not hold every schema field, and the application owns a corpus `revision` that joins the query identity.
 - Requires `@priemskiyyy/scout` 0.1 and `minisearch` 7.
 
-## @priemskiyyy/scout-fuse 0.1.0 - Unreleased
+## @priemskiyyy/scout-fuse 0.1.0 - 2026-10-30
 
 - First release. An injected Fuse.js 7.5 instance with portable filters and sorts over the complete match set and exact pagination.
 - A profile over fewer keys than Fuse indexes becomes a Fuse logical query, and is refused where extended or token search cannot run one.

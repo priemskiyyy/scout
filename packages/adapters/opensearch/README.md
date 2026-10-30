@@ -6,7 +6,7 @@ search request onto one OpenSearch index and maps the answer back, and it
 does nothing else.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-opensearch @opensearch-project/opensearch
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-opensearch@next @opensearch-project/opensearch
 ```
 
 `@opensearch-project/opensearch` is a peer dependency and the client is

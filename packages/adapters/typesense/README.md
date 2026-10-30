@@ -6,7 +6,7 @@ search request onto one Typesense collection and maps the answer back, and it
 does nothing else.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-typesense typesense
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-typesense@next typesense
 ```
 
 `typesense` is a peer dependency and the client is yours. This package imports

@@ -7,7 +7,7 @@ one collection, `$search` first, and maps the rows back, and it does nothing
 else.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-mongodb mongodb
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-mongodb@next mongodb
 ```
 
 `mongodb` is a peer dependency and the client is yours. This package imports

@@ -6,7 +6,7 @@ search request onto one Elasticsearch index and maps the answer back, and it
 does nothing else.
 
 ```sh
-pnpm add @priemskiyyy/scout @priemskiyyy/scout-elasticsearch @elastic/elasticsearch
+pnpm add @priemskiyyy/scout@next @priemskiyyy/scout-elasticsearch@next @elastic/elasticsearch
 ```
 
 `@elastic/elasticsearch` is a peer dependency and the client is yours. This
